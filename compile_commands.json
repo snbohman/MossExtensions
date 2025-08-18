@@ -1,0 +1,23 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/clang++",
+      "-DDEBUG",
+      "-I../include",
+      "-I../../core/include",
+      "-I../../core/external/entt/single_include",
+      "-I../../core/external/spdlog/include",
+      "-I/usr/local/include",
+      "-m64",
+      "-g",
+      "-std=c++20",
+      "-c",
+      "-o",
+      "../build/debug/Extensions/main.o",
+      "../src/main.cpp"
+    ],
+    "directory": "/Users/sixtenbohman/dev/mossSuite/extensions/scripts",
+    "file": "/Users/sixtenbohman/dev/mossSuite/extensions/src/main.cpp",
+    "output": "/Users/sixtenbohman/dev/mossSuite/extensions/build/debug/Extensions/main.o"
+  }
+]
