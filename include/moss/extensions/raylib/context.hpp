@@ -7,7 +7,7 @@
 
 namespace moss::extensions::raylib {
 
-class MainContext : public moss::Context {
+class Renderer : public moss::Context {
 public:
     void init(moss::Mirror& mirror) override {
         mirror
