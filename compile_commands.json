@@ -16,8 +16,8 @@
       "../build/debug/Extensions/main.o",
       "../src/main.cpp"
     ],
-    "directory": "/Users/sixtenbohman/dev/mossSuite/extensions/scripts",
-    "file": "/Users/sixtenbohman/dev/mossSuite/extensions/src/main.cpp",
-    "output": "/Users/sixtenbohman/dev/mossSuite/extensions/build/debug/Extensions/main.o"
+    "directory": "/Users/sixtenbohman/personal/mossSuite/extensions/scripts",
+    "file": "/Users/sixtenbohman/personal/mossSuite/extensions/src/main.cpp",
+    "output": "/Users/sixtenbohman/personal/mossSuite/extensions/build/debug/Extensions/main.o"
   }
 ]
