@@ -1032,9 +1032,8 @@
   ../../core/include/moss/meta/aliases.hpp \
   ../include/moss/extensions/raylib/context.hpp \
   ../include/moss/extensions/raylib/components.hpp \
-  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/iostream \
-  ../include/moss/extensions/raylib/render.hpp \
-  /usr/local/include/raylib.h
+  /usr/local/include/raylib.h \
+  ../include/moss/extensions/raylib/render.hpp
 
 ../include/moss/extensions/raylib/meta.hpp:
 
@@ -3104,8 +3103,6 @@
 
 ../include/moss/extensions/raylib/components.hpp:
 
-/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/iostream:
+/usr/local/include/raylib.h:
 
 ../include/moss/extensions/raylib/render.hpp:
-
-/usr/local/include/raylib.h:

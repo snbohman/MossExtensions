@@ -1,6 +1,5 @@
 #pragma once
 
-#include "moss/commands/quit.hpp"
 #include <moss/extensions/raylib/components.hpp>
 #include <moss/moss.hpp>
 #include <raylib.h>
@@ -15,6 +14,7 @@ public:
             Window        
         >>::init(key).pool(entities);
 
+        SetTraceLogLevel(LOG_WARNING);
         InitWindow(window.width, window.height, window.title);
         SetTargetFPS(window.targetFPS);
     }
@@ -24,20 +24,26 @@ public:
             commands::Quit::init(key).quit();
         }
 
-        auto renderables = commands::Query<
-            With<Renderable>,
+        auto atlas = commands::Query<
+            With<RectRenderable>,
             commands::View<
-                Include<Renderable>
+                Include<RectRenderable>
             >
         >::init(key).atlas();
 
-        for (const auto& [renderable] : renderables) {
-            renderable.draw();
-        }
-}
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
 
-private:
-    
+        for (const auto& [rect] : atlas) {
+            rect.draw();
+        }
+
+        EndDrawing();
+    }
+
+    void exit() override {
+        CloseWindow();
+    }
 
 };
 
