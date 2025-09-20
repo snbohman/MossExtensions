@@ -15,17 +15,17 @@ struct Window : public Component {
 
 struct Transform : public Component {
     Transform(i32 _x, i32 _y) : x(_x), y(_y) { }
-    i32 x, y;
+    f32 x, y;
 };
 
 struct Albedo : public Component {
-    Albedo(f32 _r, f32 _g, f32 _b) : r(_r), g(_g), b(_b)  { }
-    f32 r, g, b;
+    Albedo(f32 _r, f32 _g, f32 _b, f32 _a) : r(_r), g(_g), b(_b), a(_a)  { }
+    f32 r, g, b, a;
 };
 
 struct RectShape : public Component {
     RectShape(i32 _x, i32 _y) : x(_x), y(_y) { }
-    i32 x, y;
+    f32 x, y;
 };
 
 struct Renderable : public Component {
@@ -37,14 +37,14 @@ struct RectRenderable : public Renderable {
         const Transform& t,
         const RectShape& s,
         const Albedo& a
-    ) : shape(s), transform(t), albedo(a) { }
+    ) : transform(t), shape(s), albedo(a) { }
 
     void draw() override {
         DrawRectangle(
             transform.x, transform.y,
             shape.x, shape.y,
             ColorFromNormalized({
-                albedo.r, albedo.g, albedo.b, 1
+                albedo.r, albedo.g, albedo.b, albedo.a
             })
         );
     }
