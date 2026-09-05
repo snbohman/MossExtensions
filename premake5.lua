@@ -29,13 +29,8 @@ project "mossExtensions"
         "../core/include",
     }
 
-    libdirs {
-        "../core/bin/debug"
-    }
-
     links {
-        "mossCore",
-        "raylib",
+        "raylib"
     }
 
     filter "configurations:debug"

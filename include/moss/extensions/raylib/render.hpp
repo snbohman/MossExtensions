@@ -4,7 +4,6 @@
 #include <moss/moss.hpp>
 #include <raylib.h>
 
-
 namespace moss::extensions::raylib {
 
 class Render : public moss::System {
