@@ -14,10 +14,10 @@ if is_standalone then
         flags { "MultiProcessorCompile" }
         configurations { "debug", "release" }
 
-        startproject("Extensions") -- Helpful in IDE
+        startproject("mossExtensions") -- Helpful in IDE
 end
 
-project "Extensions"
+project "mossExtensions"
     kind "StaticLib"
     location "scripts"
     targetdir "bin/%{cfg.buildcfg}"
@@ -27,25 +27,15 @@ project "Extensions"
     includedirs {
         "include",
         "../core/include",
-        "../core/external/entt/single_include",
-        "../core/external/spdlog/include",
-
-        "/usr/local/include"
     }
 
     libdirs {
-        "../core/bin/debug",
-        "/usr/local/lib"
+        "../core/bin/debug"
     }
 
     links {
-        "Core",
+        "mossCore",
         "raylib",
-
-        "Cocoa.framework",
-        "OpenGL.framework",
-        "IOKit.framework",
-        "CoreVideo.framework"
     }
 
     filter "configurations:debug"
