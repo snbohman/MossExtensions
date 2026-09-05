@@ -4,3 +4,4 @@ build
 scripts
 *.o
 .envrc
+flake.lock
