@@ -4,10 +4,9 @@
 #include <moss/moss.hpp>
 #include <raylib.h>
 
-
 namespace moss::extensions::raylib {
 
-class Render : public moss::System {
+class Renderer : public moss::System {
 public:
     void build(const Key<key::WRITE>& key, const DynamicView& entities) override {
         auto [window] = commands::DynamicQuery<With<

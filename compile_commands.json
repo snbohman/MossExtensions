@@ -1,1 +1,20 @@
-[]
+[
+  {
+    "arguments": [
+      "/nix/store/w88q44gqd1qg5wmkk7v0h97rpiqvam0l-gcc-wrapper-15.3.0/bin/g++",
+      "-DDEBUG",
+      "-I../include",
+      "-I../../core/include",
+      "-m64",
+      "-g",
+      "-std=c++20",
+      "-c",
+      "-o",
+      "../build/debug/mossExtensions/main.o",
+      "../src/main.cpp"
+    ],
+    "directory": "/home/snbohman/dev/probe/moss/extensions/scripts",
+    "file": "/home/snbohman/dev/probe/moss/extensions/src/main.cpp",
+    "output": "/home/snbohman/dev/probe/moss/extensions/build/debug/mossExtensions/main.o"
+  }
+]

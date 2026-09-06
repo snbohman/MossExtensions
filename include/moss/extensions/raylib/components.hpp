@@ -7,10 +7,11 @@
 namespace moss::extensions::raylib {
 
 struct Window : public Component {
-    const char* title = "Moss | Raylib";
-    i32 width = 800;
-    i32 height = 800;
-    i32 targetFPS = 60;
+    Window(const char* t, i32 w, i32 h, i32 fps) : title(t), width(w), height(h), targetFPS(fps) { }
+    const char* title;
+    i32 width;
+    i32 height;
+    i32 targetFPS;
 };
 
 struct Transform : public Component {
