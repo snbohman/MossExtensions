@@ -13,8 +13,8 @@
       "../build/debug/mossExtensions/main.o",
       "../src/main.cpp"
     ],
-    "directory": "/home/snbohman/dev/probe/moss/extensions/scripts",
-    "file": "/home/snbohman/dev/probe/moss/extensions/src/main.cpp",
-    "output": "/home/snbohman/dev/probe/moss/extensions/build/debug/mossExtensions/main.o"
+    "directory": "/home/snbohman/dev/moss/extensions/scripts",
+    "file": "/home/snbohman/dev/moss/extensions/src/main.cpp",
+    "output": "/home/snbohman/dev/moss/extensions/build/debug/mossExtensions/main.o"
   }
 ]
