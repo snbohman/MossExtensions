@@ -30,7 +30,10 @@ project "mossExtensions"
     }
 
     links {
-        "raylib"
+        "raylib",
+        "vulkan",
+        "glfw",
+        "vk-bootstrap"
     }
 
     filter "configurations:debug"

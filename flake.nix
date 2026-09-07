@@ -17,7 +17,7 @@
           vulkan-headers
           vulkan-validation-layers
           vk-bootstrap
-          glfw
+          glfw3
         ];
       };
     };

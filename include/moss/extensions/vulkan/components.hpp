@@ -18,8 +18,13 @@
 
 namespace moss::extensions::vulkan {
 
-struct Window : public Component {
-    Window(const char* t, i32 w, i32 h, i32 fps) : title(t), width(w), height(h), targetFPS(fps) { }
+struct RenderSettings : public Component {
+    RenderSettings(bool useVL) : validationLayers(useVL) { }
+    bool validationLayers;
+};
+
+struct WindowSettings : public Component {
+    WindowSettings(const char* t, i32 w, i32 h, i32 fps) : title(t), width(w), height(h), targetFPS(fps) { }
     const char* title;
     i32 width;
     i32 height;
