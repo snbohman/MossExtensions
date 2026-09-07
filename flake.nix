@@ -16,9 +16,18 @@
           vulkan-loader
           vulkan-headers
           vulkan-validation-layers
+          vulkan-utility-libraries
           vk-bootstrap
           glfw3
+          shaderc
         ];
       };
+
+      LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+        pkgs.vulkan-loader
+        pkgs.glfw
+      ];
+
+      VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
     };
 }

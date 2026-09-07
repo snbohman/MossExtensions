@@ -27,6 +27,7 @@ project "mossExtensions"
     includedirs {
         "include",
         "../core/include",
+        "$(VULKAN_SDK)/include"
     }
 
     links {

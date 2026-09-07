@@ -19,16 +19,6 @@ public:
     }
 
 private:
-    void initGlfw(WindowSettings windowSettings);
-	void initVulkan(RenderSettings renderSettings);
-	void initSwapchain(WindowSettings windowSettings);
-	void initCommands();
-	void initSyncStructures();
-    void cleanup();
-
-    void createSwapchain(WindowSettings windowSettings);
-    void destroySwapchain();
-
     struct Foundation {
         GLFWwindow* window;
         VkInstance instance;
@@ -36,20 +26,40 @@ private:
         VkPhysicalDevice physicalDevice;
         VkDevice device;
         VkSurfaceKHR surface;
+        VkQueue queue;      // all in one graphics queue. only using one general
+        u32 queueFamily;
         bool initialized;
     };
     struct Swapchain {
         VkSwapchainKHR swapchain;
-        VkFormat swapchainImageFormat;
-        std::vector<VkImage> swapchainImages;
-        std::vector<VkImageView> swapchainImageViews;
-        VkExtent2D swapchainExtent;
+        VkFormat imageFormat;
+        std::vector<VkImage> images;
+        std::vector<VkImageView> imageViews;
+        VkExtent2D extent;
     };
-    struct FrameData { };
+    struct Update {
+        u32 frameNumber;
+        bool stopRendering;
+    };
+    struct FrameData {
+        VkCommandPool commandPool;
+        VkCommandBuffer mainCommandBuffer;
+        static constexpr u32 FRAME_OVERLAP = 2;
+    };
 
-    Foundation m_foundation;
-    Swapchain m_swapchain;
-    FrameData m_frameData;
+    Foundation m_foundation = {};
+    Swapchain m_swapchain = {};
+    FrameData m_frames[FrameData::FRAME_OVERLAP] = {};
+    Update m_update = {};
+
+    void initGlfw(WindowSettings windowSettings);
+	void initVulkan(RenderSettings renderSettings);
+	void initSwapchain(WindowSettings windowSettings);
+	void initCommands();
+	void initSyncStructures();
+    void cleanup();
+
+    FrameData& getCurrentFrame() { return m_frames[m_update.frameNumber % FrameData::FRAME_OVERLAP]; }
 };
 
 }
