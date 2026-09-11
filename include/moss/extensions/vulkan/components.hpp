@@ -26,9 +26,9 @@ struct RenderSettings : public Component {
 struct WindowSettings : public Component {
     WindowSettings(const char* t, i32 w, i32 h, i32 fps, bool r) : title(t), width(w), height(h), targetFPS(fps), resize(r) { }
     const char* title;
-    i32 width;
-    i32 height;
-    i32 targetFPS;
+    u32 width;
+    u32 height;
+    u32 targetFPS;
     bool resize;
 };
 

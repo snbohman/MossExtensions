@@ -132,8 +132,95 @@ inline VkImageSubresourceRange subresourceRange(VkImageAspectFlags aspectMask) {
     return subImage;
 }
 
+VkImageCreateInfo imageCreateInfo(
+    VkFormat format,
+    VkImageUsageFlags usageFlags,
+    VkExtent3D extent
+) {
+    VkImageCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    info.pNext = nullptr;
 
-} // namespace create
+    info.imageType = VK_IMAGE_TYPE_2D;
+    info.format = format;
+    info.extent = extent;
+    info.samples = VK_SAMPLE_COUNT_1_BIT; // For MSAA
+    info.mipLevels = 1;
+    info.arrayLayers = 1;
+    info.tiling = VK_IMAGE_TILING_OPTIMAL; // Optimal tiling, best gpu format
+    info.usage = usageFlags;
+
+    return info;
+}
+
+/* From vkguide 2.1 (vkguide.dev/docs/new_chapter_2/vulkan_new_rendering):
+ * We will hardcode the image tiling to OPTIMAL, which means that we allow the
+ * gpu to shuffle the data however it sees fit. If we want to read the image
+ * data from cpu, we would need to use tiling LINEAR, which makes the gpu data
+ * into a simple 2d array. This tiling highly limits what the gpu can do, so the
+ * only real use case for LINEAR is CPU readback.
+ */
+inline VkImageViewCreateInfo imageViewCreateInfo(
+    VkFormat format,
+    VkImage image,
+    VkImageAspectFlags aspectFlags
+) {
+    VkImageViewCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    info.pNext = nullptr;
+
+    info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    info.image = image;
+    info.format = format;
+    info.subresourceRange.baseMipLevel = 0;
+    info.subresourceRange.levelCount = 1;
+    info.subresourceRange.baseArrayLayer = 0;
+    info.subresourceRange.layerCount = 1;
+    info.subresourceRange.aspectMask = aspectFlags;
+
+    return info;
+}
+
+inline void copyImage(
+    VkCommandBuffer cmd,
+    VkImage source,
+    VkImage destination,
+    VkExtent2D srcSize,
+    VkExtent2D dstSize
+) {
+	VkImageBlit2 blitRegion{ .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2, .pNext = nullptr };
+
+	blitRegion.srcOffsets[1].x = srcSize.width;
+	blitRegion.srcOffsets[1].y = srcSize.height;
+	blitRegion.srcOffsets[1].z = 1;
+
+	blitRegion.dstOffsets[1].x = dstSize.width;
+	blitRegion.dstOffsets[1].y = dstSize.height;
+	blitRegion.dstOffsets[1].z = 1;
+
+	blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	blitRegion.srcSubresource.baseArrayLayer = 0;
+	blitRegion.srcSubresource.layerCount = 1;
+	blitRegion.srcSubresource.mipLevel = 0;
+
+	blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	blitRegion.dstSubresource.baseArrayLayer = 0;
+	blitRegion.dstSubresource.layerCount = 1;
+	blitRegion.dstSubresource.mipLevel = 0;
+
+	VkBlitImageInfo2 blitInfo{ .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2, .pNext = nullptr };
+	blitInfo.dstImage = destination;
+	blitInfo.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	blitInfo.srcImage = source;
+	blitInfo.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	blitInfo.filter = VK_FILTER_LINEAR;
+	blitInfo.regionCount = 1;
+	blitInfo.pRegions = &blitRegion;
+
+	vkCmdBlitImage2(cmd, &blitInfo);
+}
+
+} // namespace info
 
 /*
  * A thing we care in that structure is the AspectMask. This is going to be

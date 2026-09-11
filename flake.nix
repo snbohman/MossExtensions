@@ -17,6 +17,7 @@
           vulkan-headers
           vulkan-validation-layers
           vulkan-utility-libraries
+          vulkan-memory-allocator
           vk-bootstrap
           glfw3
           shaderc

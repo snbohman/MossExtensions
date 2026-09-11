@@ -1,10 +1,6 @@
 #pragma once
 
-#include <vulkan/vulkan_core.h>
-#include <GLFW/glfw3.h>
-#include <VkBootstrap.h>
-
-#include <moss/moss.hpp>
+#include "moss/extensions/vulkan/meta.hpp"
 #include "moss/extensions/vulkan/components.hpp"
 
 
@@ -16,6 +12,32 @@ public:
     void tick(const Key<key::READ>& key) override;
 
 private:
+    /*
+     * From VkGuide, 2. Drawing Compute: Improving the render loop,
+     * **(https://vkguide.dev/docs/new_chapter_2/vulkan_new_rendering/)**:
+     * "Doing callbacks like this is inneficient at scale, because we are storing
+     * whole std::functions for every object we are deleting, which is not going
+     * to be optimal. For the amount of objects we will use in this tutorial,
+     * its going to be fine. but if you need to delete thousands of objects and
+     * want them deleted faster, a better implementation would be to store
+     * arrays of vulkan handles of various types such as VkImage, VkBuffer, and
+     * so on. And then delete those from a loop."
+     */
+    struct DeletionQueue {
+        std::deque<std::function<void()>> deletors;
+
+        void push(std::function<void()>&& function) {
+            deletors.push_back(function);
+        }
+
+        void flush() {
+            // Reverse iterate the deletion queue to execute all the functions
+            for (auto it = deletors.rbegin(); it != deletors.rend(); it++)
+                (*it)();
+            deletors.clear();
+        }
+    };
+
     struct Foundation {
         GLFWwindow* window;
         VkInstance instance;
@@ -23,7 +45,7 @@ private:
         VkPhysicalDevice physicalDevice;
         VkDevice device;
         VkSurfaceKHR surface;
-        VkQueue graphicsQueue;      // all in one graphics queue. only using one general
+        VkQueue graphicsQueue;      // all in one graphics queue. only using 1 general
         u32 queueFamily;
         bool initialized;
     };
@@ -33,6 +55,7 @@ private:
         std::vector<VkImage> images;
         std::vector<VkImageView> imageViews;
         VkExtent2D extent;
+        DeletionQueue dqueue;
     };
     struct Update {
         u32 frameNumber = 0;
@@ -44,21 +67,25 @@ private:
         VkSemaphore swapchainSemaphore;
         VkFence renderFence;
         static constexpr u32 FRAME_OVERLAP = 2;
+        DeletionQueue dqueue;
+    };
+    struct AllocatedImage {
+        VkImage image;
+        VkImageView imageView;
+        VmaAllocation allocation;
+        VkExtent3D imageExtent;
+        VkFormat imageFormat;
     };
 
-    // Sized to swapchain image count, NOT FRAME_OVERLAP
-    // Finished Render Semaphore
-    // On swapchain recreation (resize): destroy and recreate
-    // renderFinishedSemaphores too, resized to the new image count
-    //
-    // Cleanup: destroy each semaphore in renderFinishedSemaphores
-    // shutdown code, separately from per-FrameData cleanup loop.
-    std::vector<VkSemaphore> m_renderSemaphore = {};
-
+    DeletionQueue m_dqueue;
     Foundation m_foundation = {};
     Swapchain m_swapchain = {};
     FrameData m_frames[FrameData::FRAME_OVERLAP] = {};
+    std::vector<VkSemaphore> m_renderSemaphore = {}; // Sized to swapImgCount
     Update m_update = {};
+    VmaAllocator m_allocator;
+    AllocatedImage m_drawImage;
+    VkExtent2D m_drawExtent;
 
     void initGlfw(WindowSettings windowSettings);
 	void initVulkan(RenderSettings renderSettings);
@@ -66,9 +93,12 @@ private:
 	void initCommands();
 	void initSyncStructures();
     void draw();
+    void drawBackground(VkCommandBuffer cmd, u32 swapchainImageIndex);
     void cleanup();
 
-    FrameData& getCurrentFrame() { return m_frames[m_update.frameNumber % FrameData::FRAME_OVERLAP]; }
+    FrameData& getCurrentFrame() {
+        return m_frames[m_update.frameNumber % FrameData::FRAME_OVERLAP];
+    }
 };
 
 }

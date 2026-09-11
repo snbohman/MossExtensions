@@ -1,13 +1,7 @@
-#include <vulkan/vulkan_core.h>
-#include <GLFW/glfw3.h>
-#include <VkBootstrap.h>
-
-#include <moss/moss.hpp>
 #include "moss/extensions/vulkan/renderer.hpp"
 #include "moss/extensions/vulkan/components.hpp"
-#include "moss/extensions/vulkan/logs.hpp"
 #include "moss/extensions/vulkan/utils.hpp"
-
+#include "moss/extensions/vulkan/logs.hpp"
 
 namespace moss::extensions::vulkan {
 
@@ -103,6 +97,18 @@ void Renderer::initVulkan(RenderSettings renderSettings) {
     m_foundation.graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
     m_foundation.queueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
 
+    // Initialize VMA allocator
+    VmaAllocatorCreateInfo allocatorInfo = {};
+    allocatorInfo.physicalDevice = m_foundation.physicalDevice;
+    allocatorInfo.device = m_foundation.device;
+    allocatorInfo.instance = m_foundation.instance;
+    allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+    vmaCreateAllocator(&allocatorInfo, &m_allocator);
+
+    m_dqueue.push([&]() {
+        vmaDestroyAllocator(m_allocator);
+    });
+
     // Flag foundation as initialized
     m_foundation.initialized = true;
 }
@@ -114,6 +120,7 @@ void Renderer::initSwapchain(WindowSettings windowSettings) {
         m_foundation.device,
         m_foundation.surface
     };
+
 	vkb::Swapchain vkbSwapchain = swapchainBuilder
 		.set_desired_format(VkSurfaceFormatKHR{
             .format = m_swapchain.imageFormat,
@@ -129,6 +136,64 @@ void Renderer::initSwapchain(WindowSettings windowSettings) {
 	m_swapchain.swapchain = vkbSwapchain.swapchain;
 	m_swapchain.images = vkbSwapchain.get_images().value();
 	m_swapchain.imageViews = vkbSwapchain.get_image_views().value();
+
+	// Draw image size will match the window
+	VkExtent3D drawImageExtent = {
+		windowSettings.width,
+		windowSettings.height,
+		1
+	};
+
+	// Hardcoding the draw format to 32 bit float
+	m_drawImage.imageFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+	m_drawImage.imageExtent = drawImageExtent;
+
+	VkImageUsageFlags drawImageUsages{};
+	drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	drawImageUsages |= VK_IMAGE_USAGE_STORAGE_BIT;
+	drawImageUsages |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+	VkImageCreateInfo rimgInfo = utils::init::imageCreateInfo(
+        m_drawImage.imageFormat,
+        drawImageUsages,
+        drawImageExtent
+    );
+
+	// For the draw image, we want to allocate it from gpu local memory
+	VmaAllocationCreateInfo rimgAllocInfo = {};
+	rimgAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+	rimgAllocInfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+	//allocate and create the image
+	vmaCreateImage(
+        m_allocator,
+        &rimgInfo,
+        &rimgAllocInfo,
+        &m_drawImage.image,
+        &m_drawImage.allocation,
+        nullptr
+    );
+
+	// Build a image-view for the draw image to use for rendering
+	VkImageViewCreateInfo rview_info = utils::init::imageViewCreateInfo(
+        m_drawImage.imageFormat,
+        m_drawImage.image,
+        VK_IMAGE_ASPECT_COLOR_BIT
+    );
+
+	VK_CHECK(vkCreateImageView(
+        m_foundation.device,
+        &rview_info,
+        nullptr,
+        &m_drawImage.imageView
+    ));
+
+	// Add to deletion queues
+	m_dqueue.push([=]() {
+		vkDestroyImageView(m_foundation.device, m_drawImage.imageView, nullptr);
+		vmaDestroyImage(m_allocator, m_drawImage.image, m_drawImage.allocation);
+	});
 }
 
 void Renderer::initCommands() {
@@ -195,7 +260,12 @@ void Renderer::draw() {
     // Timeout in nanoseconds :O
     VK_CHECK(vkWaitForFences(
         m_foundation.device, 1, &getCurrentFrame().renderFence, true, 1000000000
-    )); VK_CHECK(vkResetFences(
+    ));
+
+    // Flush objects in per frame dqueue
+    getCurrentFrame().dqueue.flush();
+
+    VK_CHECK(vkResetFences(
         m_foundation.device, 1, &getCurrentFrame().renderFence
     ));
 
@@ -214,71 +284,48 @@ void Renderer::draw() {
     VkCommandBuffer cmd = getCurrentFrame().mainCommandBuffer;
     VK_CHECK(vkResetCommandBuffer(cmd, 0));
 
-    // Command Start Info
+    // Mapping the drawing dimensions to the drawImageExtent.
+	m_drawExtent.width  = m_drawImage.imageExtent.width;
+	m_drawExtent.height = m_drawImage.imageExtent.height;
+
     VkCommandBufferBeginInfo cmdBeginInfo = utils::init::cmdBufBeginInfo(
         VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
     );
-    VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
 
-    /*
-     * Now its time to start drawing!
-     * First make swapchain image into writeable mode before rendering.
-     * Then render a clear-color frame number flashing on screen
-     * Then finilize the swapchain image into presentable mode
-     *
-     * The target layout we want is VK_IMAGE_LAYOUT_GENERAL. This is a general
-     * purpose layout, which allows reading and writing from the image. Its not
-     * the most optimal layout for rendering, but it is the one we want for
-     * vkCmdClearColorImage . This is the image layout you want to use if you
-     * want to write a image from a compute shader. If you want a read-only
-     * image or a image to be used with rasterization commands, there are better
-     * options
-     * (https://docs.vulkan.org/spec/latest/chapters/resources.html#resources-image-layouts)
-     */
+    // Begin Command Sequence To Buffer (simply a BeginDraw())
+	VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));	
+
+	// Transition our main draw image into general layout so we can write into it
     utils::transitionImage(
-        cmd,
-        m_swapchain.images[swapchainImageIndex],
-        VK_IMAGE_LAYOUT_UNDEFINED, // old layout: undefined
-        VK_IMAGE_LAYOUT_GENERAL    // new layout: writeable mode 
+        cmd, m_drawImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL
     );
 
-    // Provisional code for a flashing screen interpolating between black and blue
-	VkClearColorValue clearValue;
-	float flash = std::abs(std::sin(m_update.frameNumber / 120.f));
-	clearValue = { { 0.0f, 0.0f, flash, 1.0f } };
+    // Draw the sinoidal background
+	drawBackground(cmd, swapchainImageIndex);
 
-	VkImageSubresourceRange clearRange = utils::init::subresourceRange(
-        VK_IMAGE_ASPECT_COLOR_BIT
-    );
-
-    // Clear Color Image Command! First drawing command!!
-    vkCmdClearColorImage(
-        cmd,
-        m_swapchain.images[swapchainImageIndex],
-        VK_IMAGE_LAYOUT_GENERAL,
-        &clearValue,
-        1,
-        &clearRange
-    );
-
-    // Present swapchain with transition image
+	// Transition the draw image and the swapchain image into their correct transfer layouts
 	utils::transitionImage(
-        cmd,
-        m_swapchain.images[swapchainImageIndex],
-        VK_IMAGE_LAYOUT_GENERAL,        // old layout: writable mode
-        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR // new layout: present mode
+        cmd, m_drawImage.image,
+        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+    );
+	utils::transitionImage(
+        cmd, m_swapchain.images[swapchainImageIndex],
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
     );
 
-	/*
-     * Finalize the command buffer (we can no longer add commands,
-     * but it can now be executed)
-     *
-     * With this, we now have a fine command buffer that is recorded and
-     * ready to be dispatched into the gpu. We could call VkQueueSubmit
-     * already, but its going to be of little use right now as we need to
-     * also connect the syncronization structures for the logic to interact
-     * correctly with the swapchain.
-     */
+	// Execute a copy from the draw image into the swapchain
+    utils::init::copyImage(
+        cmd, m_drawImage.image, m_swapchain.images[swapchainImageIndex],
+        m_drawExtent, m_swapchain.extent
+    );
+
+	// Set swapchain image layout to present so we can show it on the screen
+    utils::transitionImage(
+        cmd, m_swapchain.images[swapchainImageIndex],
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+    );
+
+	// Finalize the command buffer
 	VK_CHECK(vkEndCommandBuffer(cmd));
 
     // Prepare the submission to the queue.
@@ -330,15 +377,42 @@ void Renderer::draw() {
 	m_update.frameNumber++;
 }
 
+void Renderer::drawBackground(VkCommandBuffer cmd, u32 swapchainImageIndex) {
+    // Provisional code for a flashing screen interpolating between black and blue
+	VkClearColorValue clearValue;
+	float flash = std::abs(std::sin(m_update.frameNumber / 120.f));
+	clearValue = { { 0.0f, 0.0f, flash, 1.0f } };
+
+	VkImageSubresourceRange clearRange = utils::init::subresourceRange(
+        VK_IMAGE_ASPECT_COLOR_BIT
+    );
+
+    // Clear Color Image Command
+    vkCmdClearColorImage(
+        cmd,
+        m_swapchain.images[swapchainImageIndex],
+        VK_IMAGE_LAYOUT_GENERAL,
+        &clearValue,
+        1,
+        &clearRange
+    );
+}
+
 void Renderer::cleanup() {
 	if (m_foundation.initialized) {
-        // Per frame Command Pool and per frame sync objects
+        // Wait for it to become quite
 		vkDeviceWaitIdle(m_foundation.device);
+
+        // Per frame Command Pool and per frame sync objects
 		for (int i = 0; i < FrameData::FRAME_OVERLAP; i++) {
 			vkDestroyCommandPool(m_foundation.device, m_frames[i].commandPool, nullptr);
             vkDestroyFence(m_foundation.device, m_frames[i].renderFence, nullptr);
             vkDestroySemaphore(m_foundation.device, m_frames[i].swapchainSemaphore, nullptr);
+
+            m_frames[i].dqueue.flush(); // flush per frame data
         }
+
+        m_dqueue.flush(); // flush game data
 
         // Destroy seperatly allocated per swapchain image render semaphore
         for (auto& sem : m_renderSemaphore)
