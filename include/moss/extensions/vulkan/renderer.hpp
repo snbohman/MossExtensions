@@ -2,6 +2,7 @@
 
 #include "moss/extensions/vulkan/meta.hpp"
 #include "moss/extensions/vulkan/components.hpp"
+#include "moss/extensions/vulkan/utils.hpp"
 
 
 namespace moss::extensions::vulkan {
@@ -12,32 +13,9 @@ public:
     void tick(const Key<key::READ>& key) override;
 
 private:
-    /*
-     * From VkGuide, 2. Drawing Compute: Improving the render loop,
-     * **(https://vkguide.dev/docs/new_chapter_2/vulkan_new_rendering/)**:
-     * "Doing callbacks like this is inneficient at scale, because we are storing
-     * whole std::functions for every object we are deleting, which is not going
-     * to be optimal. For the amount of objects we will use in this tutorial,
-     * its going to be fine. but if you need to delete thousands of objects and
-     * want them deleted faster, a better implementation would be to store
-     * arrays of vulkan handles of various types such as VkImage, VkBuffer, and
-     * so on. And then delete those from a loop."
-     */
-    struct DeletionQueue {
-        std::deque<std::function<void()>> deletors;
-
-        void push(std::function<void()>&& function) {
-            deletors.push_back(function);
-        }
-
-        void flush() {
-            // Reverse iterate the deletion queue to execute all the functions
-            for (auto it = deletors.rbegin(); it != deletors.rend(); it++)
-                (*it)();
-            deletors.clear();
-        }
-    };
-
+    /* -------------------------------------------------------------------- */
+    /* ----------------------- Categorising Structs ----------------------- */
+    /* -------------------------------------------------------------------- */
     struct Foundation {
         GLFWwindow* window;
         VkInstance instance;
@@ -55,7 +33,6 @@ private:
         std::vector<VkImage> images;
         std::vector<VkImageView> imageViews;
         VkExtent2D extent;
-        DeletionQueue dqueue;
     };
     struct Update {
         u32 frameNumber = 0;
@@ -67,35 +44,52 @@ private:
         VkSemaphore swapchainSemaphore;
         VkFence renderFence;
         static constexpr u32 FRAME_OVERLAP = 2;
-        DeletionQueue dqueue;
+        utils::interface::DeletionQueue dqueue;
     };
     struct AllocatedImage {
         VkImage image;
         VkImageView imageView;
         VmaAllocation allocation;
+        VkExtent2D drawExtent;
         VkExtent3D imageExtent;
         VkFormat imageFormat;
     };
+    struct Descriptors {
+        utils::interface::DescriptorAllocator allocator;
+        VkDescriptorSet drawImage;
+        VkDescriptorSetLayout drawImageLayout;
+    };
 
-    DeletionQueue m_dqueue;
+    /* ------------------------------------------------------- */
+    /* ----------------------- Members ----------------------- */
+    /* ------------------------------------------------------- */
     Foundation m_foundation = {};
     Swapchain m_swapchain = {};
     FrameData m_frames[FrameData::FRAME_OVERLAP] = {};
-    std::vector<VkSemaphore> m_renderSemaphore = {}; // Sized to swapImgCount
     Update m_update = {};
-    VmaAllocator m_allocator;
+    Descriptors m_descriptors = {};
     AllocatedImage m_drawImage;
-    VkExtent2D m_drawExtent;
 
+    utils::interface::DeletionQueue m_dqueue;
+    std::vector<VkSemaphore> m_renderSemaphore = {}; // Sized to swapImgCount
+    VmaAllocator m_allocator;
+
+    /* ------------------------------------------------------- */
+    /* ----------------------- Methods ----------------------- */
+    /* ------------------------------------------------------- */
     void initGlfw(WindowSettings windowSettings);
 	void initVulkan(RenderSettings renderSettings);
 	void initSwapchain(WindowSettings windowSettings);
 	void initCommands();
 	void initSyncStructures();
+    void initDescriptors(const Bindings& bindings);
     void draw();
     void drawBackground(VkCommandBuffer cmd, u32 swapchainImageIndex);
     void cleanup();
 
+    /* ------------------------------------------------------- */
+    /* ----------------------- Inlined ----------------------- */
+    /* ------------------------------------------------------- */
     FrameData& getCurrentFrame() {
         return m_frames[m_update.frameNumber % FrameData::FRAME_OVERLAP];
     }

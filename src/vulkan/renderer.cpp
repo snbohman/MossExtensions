@@ -2,16 +2,17 @@
 #include "moss/extensions/vulkan/components.hpp"
 #include "moss/extensions/vulkan/utils.hpp"
 #include "moss/extensions/vulkan/logs.hpp"
+#include <vulkan/vulkan_core.h>
 
 namespace moss::extensions::vulkan {
 
 void Renderer::build(const Key<key::WRITE>& key, const DynamicView& entities) {
-    auto [windowSettings] = cmd::DynamicQuery<
-        With< moss::extensions::vulkan::WindowSettings> >
+    auto [windowSettings, renderSettings] = cmd::DynamicQuery<
+        With< moss::extensions::vulkan::WindowSettings, moss::extensions::vulkan::RenderSettings > >
     ::init(key).pool(entities);
 
-    auto [renderSettings] = cmd::DynamicQuery<
-        With< moss::extensions::vulkan::RenderSettings> >
+    auto [bindings] = cmd::DynamicQuery<
+        With< moss::extensions::vulkan::Bindings > >
     ::init(key).pool(entities);
 
     initGlfw(windowSettings);
@@ -19,6 +20,7 @@ void Renderer::build(const Key<key::WRITE>& key, const DynamicView& entities) {
     initSwapchain(windowSettings);
     initCommands();
     initSyncStructures();
+    initDescriptors(bindings);
 }
 
 void Renderer::tick(const Key<key::READ>& key) {
@@ -154,7 +156,7 @@ void Renderer::initSwapchain(WindowSettings windowSettings) {
 	drawImageUsages |= VK_IMAGE_USAGE_STORAGE_BIT;
 	drawImageUsages |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-	VkImageCreateInfo rimgInfo = utils::init::imageCreateInfo(
+	VkImageCreateInfo rimgInfo = utils::info::imageCreate(
         m_drawImage.imageFormat,
         drawImageUsages,
         drawImageExtent
@@ -176,7 +178,7 @@ void Renderer::initSwapchain(WindowSettings windowSettings) {
     );
 
 	// Build a image-view for the draw image to use for rendering
-	VkImageViewCreateInfo rview_info = utils::init::imageViewCreateInfo(
+	VkImageViewCreateInfo rview_info = utils::info::imageViewCreate(
         m_drawImage.imageFormat,
         m_drawImage.image,
         VK_IMAGE_ASPECT_COLOR_BIT
@@ -199,7 +201,7 @@ void Renderer::initSwapchain(WindowSettings windowSettings) {
 void Renderer::initCommands() {
 	// Create a command pool for commands submitted to the graphics queue.
 	// We also want the pool to allow for resetting of individual command buffers
-	VkCommandPoolCreateInfo cmdPoolInfo = utils::init::cmdPoolCreateInfo(
+	VkCommandPoolCreateInfo cmdPoolInfo = utils::info::cmdPoolCreate(
         m_foundation.queueFamily,
         VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
     );
@@ -213,7 +215,7 @@ void Renderer::initCommands() {
         ));
 
 		// Allocate the default command buffer that we will use for rendering
-		VkCommandBufferAllocateInfo cmdAllocInfo = utils::init::cmdBufAllocateInfo(
+		VkCommandBufferAllocateInfo cmdAllocInfo = utils::info::cmdBufAllocate(
             m_frames[i].commandPool,
             1
         );
@@ -232,10 +234,10 @@ void Renderer::initSyncStructures() {
 	// One fence to control when the gpu has finished rendering the frame,
 	// and 2 semaphores to syncronize rendering with swapchain
 	// We want the fence to start signalled so we can wait on it on the first frame
-	VkFenceCreateInfo fenceCreateInfo = utils::init::fenceCreateInfo(
+	VkFenceCreateInfo fenceCreateInfo = utils::info::fenceCreate(
         VK_FENCE_CREATE_SIGNALED_BIT
     );
-	VkSemaphoreCreateInfo semCreateInfo = utils::init::semCreateInfo(0);
+	VkSemaphoreCreateInfo semCreateInfo = utils::info::semaphoreCreate(0);
 
 	for (int i = 0; i < FrameData::FRAME_OVERLAP; i++) {
 		VK_CHECK(vkCreateFence(
@@ -254,6 +256,63 @@ void Renderer::initSyncStructures() {
         VK_CHECK(vkCreateSemaphore(m_foundation.device, &semCreateInfo, nullptr, &sem));
     }
 }
+
+/*
+* Currently this is very provisional. Nothing in this scales, and will have
+* to be generalized to correctly work with the moss philosophy.
+*/
+void Renderer::initDescriptors(const Bindings& bindings) {
+	// Create a descriptor pool that will hold 10 sets with 1 image each
+	std::vector<utils::interface::DescriptorAllocator::PoolSizeRatio> sizes = {
+		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 }
+	};
+
+	m_descriptors.allocator.init(m_foundation.device, 10, sizes);
+
+	// Fetch info and make the descriptor set layout for our compute draw
+	{
+        VkDescriptorSetLayoutCreateInfo info = utils::info::descriptorSetLayoutCreate(
+            bindings.bindings,
+            VK_SHADER_STAGE_COMPUTE_BIT
+        );
+        VK_CHECK(vkCreateDescriptorSetLayout(
+            m_foundation.device,
+            &info,
+            nullptr,
+            &m_descriptors.drawImageLayout
+        ));
+	}
+
+	// Allocate a descriptor set for our draw image
+	m_descriptors.drawImage = m_descriptors.allocator.allocate(
+        m_foundation.device,
+        m_descriptors.drawImageLayout
+    );
+
+	// Update descriptor sets with the current screen
+	VkDescriptorImageInfo imgInfo = {};
+	imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+	imgInfo.imageView = m_drawImage.imageView;
+	
+	VkWriteDescriptorSet drawImageWrite = {};
+	drawImageWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	drawImageWrite.pNext = nullptr;
+	
+	drawImageWrite.dstBinding = 0;
+	drawImageWrite.dstSet = m_descriptors.drawImage;
+	drawImageWrite.descriptorCount = 1;
+	drawImageWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+	drawImageWrite.pImageInfo = &imgInfo;
+
+	vkUpdateDescriptorSets(m_foundation.device, 1, &drawImageWrite, 0, nullptr);
+
+	// Descriptor allocator and the new layout get pushed to dqueue
+	m_dqueue.push([&]() {
+	    m_descriptors.allocator.destroy(m_foundation.device);
+
+		vkDestroyDescriptorSetLayout(m_foundation.device, m_descriptors.drawImageLayout, nullptr);
+	});
+};
 
 void Renderer::draw() {
 	// Wait until the gpu has finished rendering the last frame.
@@ -285,10 +344,10 @@ void Renderer::draw() {
     VK_CHECK(vkResetCommandBuffer(cmd, 0));
 
     // Mapping the drawing dimensions to the drawImageExtent.
-	m_drawExtent.width  = m_drawImage.imageExtent.width;
-	m_drawExtent.height = m_drawImage.imageExtent.height;
+	m_drawImage.drawExtent.width  = m_drawImage.imageExtent.width;
+	m_drawImage.drawExtent.height = m_drawImage.imageExtent.height;
 
-    VkCommandBufferBeginInfo cmdBeginInfo = utils::init::cmdBufBeginInfo(
+    VkCommandBufferBeginInfo cmdBeginInfo = utils::info::cmdBufBegin(
         VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
     );
 
@@ -314,9 +373,9 @@ void Renderer::draw() {
     );
 
 	// Execute a copy from the draw image into the swapchain
-    utils::init::copyImage(
+    utils::copyImage(
         cmd, m_drawImage.image, m_swapchain.images[swapchainImageIndex],
-        m_drawExtent, m_swapchain.extent
+        m_drawImage.drawExtent, m_swapchain.extent
     );
 
 	// Set swapchain image layout to present so we can show it on the screen
@@ -332,19 +391,19 @@ void Renderer::draw() {
     // we want to wait on the presentSemaphore, as that semaphore is
     // signaled when the swapchain is ready we will signal the
     // renderSemaphore, to signal that rendering has finished
-    VkCommandBufferSubmitInfo cmdinfo = utils::init::cmdBufSubmitInfo(cmd);	
+    VkCommandBufferSubmitInfo cmdinfo = utils::info::cmdBufSubmit(cmd);	
 	
-	VkSemaphoreSubmitInfo waitInfo = utils::init::semSubmitInfo(
+	VkSemaphoreSubmitInfo waitInfo = utils::info::semaphoreSubmit(
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR,
         getCurrentFrame().swapchainSemaphore
     );
 
-	VkSemaphoreSubmitInfo signalInfo = utils::init::semSubmitInfo(
+	VkSemaphoreSubmitInfo signalInfo = utils::info::semaphoreSubmit(
         VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
         m_renderSemaphore[swapchainImageIndex] // Replaced getCurrentFrame().rS
     );	
 	
-	VkSubmitInfo2 submit = utils::init::submitInfo(&cmdinfo,&signalInfo,&waitInfo);	
+	VkSubmitInfo2 submit = utils::info::submit(&cmdinfo,&signalInfo,&waitInfo);	
 
 	// Submit command buffer to the queue and execute it.
 	// renderFence will now block until the graphic commands finish execution
@@ -383,7 +442,7 @@ void Renderer::drawBackground(VkCommandBuffer cmd, u32 swapchainImageIndex) {
 	float flash = std::abs(std::sin(m_update.frameNumber / 120.f));
 	clearValue = { { 0.0f, 0.0f, flash, 1.0f } };
 
-	VkImageSubresourceRange clearRange = utils::init::subresourceRange(
+	VkImageSubresourceRange clearRange = utils::mask::subresourceRange(
         VK_IMAGE_ASPECT_COLOR_BIT
     );
 

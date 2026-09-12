@@ -7,3 +7,4 @@
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 #include <moss/moss.hpp>
+#include <moss/meta/logs.hpp>
