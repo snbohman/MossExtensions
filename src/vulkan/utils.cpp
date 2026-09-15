@@ -195,7 +195,7 @@ VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreate(
 /* ------------------------------------------------------ */
 namespace mask {
 
-inline VkImageSubresourceRange subresourceRange(VkImageAspectFlags aspectMask) {
+VkImageSubresourceRange subresourceRange(VkImageAspectFlags aspectMask) {
     VkImageSubresourceRange subImage = {};
     subImage.aspectMask = aspectMask;
     subImage.baseMipLevel = 0;

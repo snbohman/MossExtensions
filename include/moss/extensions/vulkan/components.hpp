@@ -19,8 +19,8 @@
 
 namespace moss::extensions::vulkan {
 
-struct RenderSettings : public Component {
-    RenderSettings(bool useVL) : validationLayers(useVL) { }
+struct RendererSettings : public Component {
+    RendererSettings(bool useVL) : validationLayers(useVL) { }
     bool validationLayers;
 };
 
@@ -41,11 +41,12 @@ struct Binding {
 
 class Bindings : public moss::Component {
 public:
-    Bindings(std::initializer_list<Binding> bindings) {
-        for (Binding binding : bindings) {
+    Bindings(std::vector<Binding> binds) {
+        this->bindings.reserve(binds.size());
+        for (Binding b : binds) {
             this->bindings.push_back(VkDescriptorSetLayoutBinding{
-                .binding = binding.index,
-                .descriptorType = binding.type,
+                .binding = b.index,
+                .descriptorType = b.type,
                 .descriptorCount = 1,
                 .stageFlags = VK_SHADER_STAGE_ALL,
                 .pImmutableSamplers = nullptr

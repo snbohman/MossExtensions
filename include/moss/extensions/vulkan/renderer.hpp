@@ -78,7 +78,7 @@ private:
     /* ----------------------- Methods ----------------------- */
     /* ------------------------------------------------------- */
     void initGlfw(WindowSettings windowSettings);
-	void initVulkan(RenderSettings renderSettings);
+	void initVulkan(RendererSettings rendererSettings);
 	void initSwapchain(WindowSettings windowSettings);
 	void initCommands();
 	void initSyncStructures();

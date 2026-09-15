@@ -1,3 +1,4 @@
+#include "moss/extensions/vulkan/meta.hpp"
 #include "moss/extensions/vulkan/renderer.hpp"
 #include "moss/extensions/vulkan/components.hpp"
 #include "moss/extensions/vulkan/utils.hpp"
@@ -7,13 +8,19 @@
 namespace moss::extensions::vulkan {
 
 void Renderer::build(const Key<key::WRITE>& key, const DynamicView& entities) {
-    auto [windowSettings, renderSettings] = cmd::DynamicQuery<
-        With< moss::extensions::vulkan::WindowSettings, moss::extensions::vulkan::RenderSettings > >
-    ::init(key).pool(entities);
+    M_DEB("HIIIIIIII");
+    auto atlas = cmd::DynamicQuery<With<
+        WindowSettings,
+        RendererSettings,
+        // Bindings
+    >>::init(key).atlas(entities);
+    M_DEB("HIIIIIIII");
 
-    auto [bindings] = cmd::DynamicQuery<
-        With< moss::extensions::vulkan::Bindings > >
-    ::init(key).pool(entities);
+    auto [windowSettings, renderSettings, _] = atlas[0];
+    M_DEB("HIIIIIIII");
+    auto [_, _, bindings] = atlas[1];
+    M_DEB("HIIIIIIII");
+    M_DEB(bindings.bindings.size());
 
     initGlfw(windowSettings);
     initVulkan(renderSettings);
@@ -44,10 +51,10 @@ void Renderer::initGlfw(WindowSettings windowSettings) {
     );
 }
 
-void Renderer::initVulkan(RenderSettings renderSettings) {
+void Renderer::initVulkan(RendererSettings rendererSettings) {
     vkb::InstanceBuilder builder;
     vkb::Instance vkbInst = builder.set_app_name("~Moss Window~")
-        .request_validation_layers(renderSettings.validationLayers)
+        .request_validation_layers(rendererSettings.validationLayers)
         .use_default_debug_messenger()
         .require_api_version(1, 3, 0)
         .build()
@@ -192,7 +199,7 @@ void Renderer::initSwapchain(WindowSettings windowSettings) {
     ));
 
 	// Add to deletion queues
-	m_dqueue.push([=]() {
+	m_dqueue.push([=, this]() {
 		vkDestroyImageView(m_foundation.device, m_drawImage.imageView, nullptr);
 		vmaDestroyImage(m_allocator, m_drawImage.image, m_drawImage.allocation);
 	});
