@@ -1,3 +1,4 @@
+#include "moss/commands/primitives.hpp"
 #include "moss/extensions/vulkan/meta.hpp"
 #include "moss/extensions/vulkan/renderer.hpp"
 #include "moss/extensions/vulkan/components.hpp"
@@ -8,19 +9,17 @@
 namespace moss::extensions::vulkan {
 
 void Renderer::build(const Key<key::WRITE>& key, const DynamicView& entities) {
-    M_DEB("HIIIIIIII");
-    auto atlas = cmd::DynamicQuery<With<
-        WindowSettings,
-        RendererSettings,
-        // Bindings
-    >>::init(key).atlas(entities);
-    M_DEB("HIIIIIIII");
+    auto [windowSettings, renderSettings] = cmd::DynamicQuery<With<
+        WindowSettings, RendererSettings
+    >, cmd::View<
+        Include<WindowSettings, RendererSettings>
+    >>::init(key).atlas(entities)[0];
 
-    auto [windowSettings, renderSettings, _] = atlas[0];
-    M_DEB("HIIIIIIII");
-    auto [_, _, bindings] = atlas[1];
-    M_DEB("HIIIIIIII");
-    M_DEB(bindings.bindings.size());
+    auto [bindings] = cmd::DynamicQuery<With<
+        Bindings
+    >, cmd::View<
+        Include<Bindings>
+    >>::init(key).atlas(entities)[0];
 
     initGlfw(windowSettings);
     initVulkan(renderSettings);
@@ -268,7 +267,7 @@ void Renderer::initSyncStructures() {
 * Currently this is very provisional. Nothing in this scales, and will have
 * to be generalized to correctly work with the moss philosophy.
 */
-void Renderer::initDescriptors(const Bindings& bindings) {
+void Renderer::initDescriptors(Bindings bindings) {
 	// Create a descriptor pool that will hold 10 sets with 1 image each
 	std::vector<utils::interface::DescriptorAllocator::PoolSizeRatio> sizes = {
 		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 }
@@ -367,7 +366,7 @@ void Renderer::draw() {
     );
 
     // Draw the sinoidal background
-	drawBackground(cmd, swapchainImageIndex);
+	drawBackground(cmd);
 
 	// Transition the draw image and the swapchain image into their correct transfer layouts
 	utils::transitionImage(
@@ -443,21 +442,19 @@ void Renderer::draw() {
 	m_update.frameNumber++;
 }
 
-void Renderer::drawBackground(VkCommandBuffer cmd, u32 swapchainImageIndex) {
-    // Provisional code for a flashing screen interpolating between black and blue
-	VkClearColorValue clearValue;
-	float flash = std::abs(std::sin(m_update.frameNumber / 120.f));
-	clearValue = { { 0.0f, 0.0f, flash, 1.0f } };
+void Renderer::drawBackground(VkCommandBuffer cmd) {
+    VkClearColorValue clearValue;
+    float flash = std::abs(std::sin(m_update.frameNumber / 120.f));
+    clearValue = { { 0.0f, 0.0f, flash, 1.0f } };
 
-	VkImageSubresourceRange clearRange = utils::mask::subresourceRange(
+    VkImageSubresourceRange clearRange = utils::mask::subresourceRange(
         VK_IMAGE_ASPECT_COLOR_BIT
     );
 
-    // Clear Color Image Command
     vkCmdClearColorImage(
         cmd,
-        m_swapchain.images[swapchainImageIndex],
-        VK_IMAGE_LAYOUT_GENERAL,
+        m_drawImage.image,              // the actual compute-target image
+        VK_IMAGE_LAYOUT_GENERAL,        // matches the transition done right before this call
         &clearValue,
         1,
         &clearRange

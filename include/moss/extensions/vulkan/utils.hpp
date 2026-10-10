@@ -47,7 +47,7 @@ VkImageViewCreateInfo imageViewCreate(
 );
 
 VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreate(
-    std::vector<VkDescriptorSetLayoutBinding> bindings,
+    std::vector<VkDescriptorSetLayoutBinding>& bindings,
     VkShaderStageFlags shaderStages,
     void* pNext = nullptr,
     VkDescriptorSetLayoutCreateFlags flags = 0

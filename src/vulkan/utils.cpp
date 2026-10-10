@@ -1,7 +1,5 @@
 #include "moss/extensions/vulkan/utils.hpp"
 #include "moss/extensions/vulkan/logs.hpp"
-#include <algorithm>
-#include <ranges>
 
 namespace moss::extensions::vulkan::utils {
 
@@ -171,7 +169,7 @@ VkImageViewCreateInfo imageViewCreate(
 }
 
 VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreate(
-    std::vector<VkDescriptorSetLayoutBinding> bindings,
+    std::vector<VkDescriptorSetLayoutBinding>& bindings,
     VkShaderStageFlags shaderStages,
     void* pNext,
     VkDescriptorSetLayoutCreateFlags flags

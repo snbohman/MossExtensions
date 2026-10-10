@@ -82,9 +82,9 @@ private:
 	void initSwapchain(WindowSettings windowSettings);
 	void initCommands();
 	void initSyncStructures();
-    void initDescriptors(const Bindings& bindings);
+    void initDescriptors(Bindings bindings);
     void draw();
-    void drawBackground(VkCommandBuffer cmd, u32 swapchainImageIndex);
+    void drawBackground(VkCommandBuffer cmd);
     void cleanup();
 
     /* ------------------------------------------------------- */
