@@ -3,8 +3,14 @@
 #include "moss/extensions/vulkan/renderer.hpp"
 #include "moss/extensions/vulkan/components.hpp"
 #include "moss/extensions/vulkan/utils.hpp"
+#include "moss/extensions/vulkan/pipelines.hpp"
 #include "moss/extensions/vulkan/logs.hpp"
 #include <vulkan/vulkan_core.h>
+
+#include <algorithm>
+#include <map>
+#include <stdexcept>
+#include <unordered_set>
 
 namespace moss::extensions::vulkan {
 
@@ -15,18 +21,18 @@ void Renderer::build(const Key<key::WRITE>& key, const DynamicView& entities) {
         Include<WindowSettings, RendererSettings>
     >>::init(key).atlas(entities)[0];
 
-    auto [bindings] = cmd::DynamicQuery<With<
-        Bindings
-    >, cmd::View<
-        Include<Bindings>
-    >>::init(key).atlas(entities)[0];
+    // Copy everything we need out of the ECS before touching Vulkan
+    std::vector<ImageConfig> imageConfigs = gatherImages(key, entities);
+    std::vector<PassConfig> passConfigs = gatherPasses(key, entities);
 
     initGlfw(windowSettings);
     initVulkan(renderSettings);
     initSwapchain(windowSettings);
     initCommands();
     initSyncStructures();
-    initDescriptors(bindings);
+    initImages(imageConfigs);
+    initDescriptors(passConfigs);   // layouts + sets (one per pass, two if ping-pong)
+    initPipelines(passConfigs);     // needs the layouts from initDescriptors
 }
 
 void Renderer::tick(const Key<key::READ>& key) {
@@ -36,7 +42,141 @@ void Renderer::tick(const Key<key::READ>& key) {
 
     glfwPollEvents();
     draw();
-} 
+}
+
+/* -------------------------------------------------------------------- */
+/* --------------------------- ECS gathering -------------------------- */
+/* -------------------------------------------------------------------- */
+
+std::vector<Renderer::ImageConfig> Renderer::gatherImages(
+    const Key<key::WRITE>& key,
+    const DynamicView& entities
+) {
+    std::vector<ImageConfig> images;
+
+    auto rows = cmd::DynamicQuery<With<
+        SimImage
+    >, cmd::View<
+        Include<SimImage>
+    >>::init(key).atlas(entities);
+
+    for (size_t i = 0; i < rows.size(); i++) {
+        auto [image] = rows[i];
+        images.push_back(ImageConfig{ image.name, image.format });
+    }
+
+    return images;
+}
+
+std::vector<Renderer::PassConfig> Renderer::gatherPasses(
+    const Key<key::WRITE>& key,
+    const DynamicView& entities
+) {
+    std::vector<PassConfig> passes;
+
+    // Compute passes
+    auto computeRows = cmd::DynamicQuery<With<
+        PassOrder, ComputeShader, GridDispatch, Bindings
+    >, cmd::View<
+        Include<
+            Pass, Shader<PipelineKind::Compute>,
+            PassOrder, ComputeShader, GridDispatch, Bindings
+        >
+    >>::init(key).atlas(entities);
+
+    for (size_t i = 0; i < computeRows.size(); i++) {
+        auto [order, shader, grid, bindings] = computeRows[i];
+
+        PassConfig config;
+        config.order = order.order;
+        config.kind = PipelineKind::Compute;
+        config.computePath = shader.path;
+        config.groupX = grid.x;
+        config.groupY = grid.y;
+        config.groupZ = grid.z;
+        config.layout = bindings.bindings;
+        config.resources = bindings.resources;
+        passes.push_back(std::move(config));
+    }
+
+    // Graphics (display) passes
+    auto graphicsRows = cmd::DynamicQuery<With<
+        PassOrder, VertexShader, FragmentShader, PipelineState, DrawCall, Bindings
+    >, cmd::View<
+        Include<
+            Pass, Shader<PipelineKind::Graphics>,
+            PassOrder, VertexShader, FragmentShader, PipelineState, DrawCall, Bindings
+        >
+    >>::init(key).atlas(entities);
+
+    for (size_t i = 0; i < graphicsRows.size(); i++) {
+        auto [order, vertex, fragment, state, drawCall, bindings] = graphicsRows[i];
+
+        PassConfig config;
+        config.order = order.order;
+        config.kind = PipelineKind::Graphics;
+        config.vertexPath = vertex.path;
+        config.fragmentPath = fragment.path;
+        config.topology = state.topology;
+        config.cullMode = state.cullMode;
+        config.frontFace = state.frontFace;
+        config.blendEnable = state.blendEnable;
+        config.vertexCount = drawCall.vertexCount;
+        config.instanceCount = drawCall.instanceCount;
+        config.layout = bindings.bindings;
+        config.resources = bindings.resources;
+        passes.push_back(std::move(config));
+    }
+
+    // Linear ordering. PassOrder doubles as the join key below, so it must be unique.
+    std::sort(passes.begin(), passes.end(), [](const PassConfig& a, const PassConfig& b) {
+        return a.order < b.order;
+    });
+    for (size_t i = 1; i < passes.size(); i++) {
+        if (passes[i].order == passes[i - 1].order)
+            throw std::runtime_error(
+                "Two passes share PassOrder " + std::to_string(passes[i].order)
+            );
+    }
+
+    // OPTIONAL PassRepeat, joined on PassOrder
+    auto repeatRows = cmd::DynamicQuery<With<
+        PassOrder, PassRepeat
+    >, cmd::View<
+        Include<Pass, PassOrder, PassRepeat>
+    >>::init(key).atlas(entities);
+
+    for (size_t i = 0; i < repeatRows.size(); i++) {
+        auto [order, repeat] = repeatRows[i];
+        for (PassConfig& pass : passes)
+            if (pass.order == order.order) pass.repeat = repeat.count;
+    }
+
+    // OPTIONAL PingPong, joined on PassOrder
+    auto pingPongRows = cmd::DynamicQuery<With<
+        PassOrder, PingPong
+    >, cmd::View<
+        Include<Pass, PassOrder, PingPong>
+    >>::init(key).atlas(entities);
+
+    for (size_t i = 0; i < pingPongRows.size(); i++) {
+        auto [order, pingPong] = pingPongRows[i];
+        for (PassConfig& pass : passes) {
+            if (pass.order != order.order) continue;
+            if (pingPong.a == pingPong.b)
+                throw std::runtime_error("PingPong needs two different images");
+            pass.pingPong = true;
+            pass.pingA = pingPong.a;
+            pass.pingB = pingPong.b;
+        }
+    }
+
+    return passes;
+}
+
+/* -------------------------------------------------------------------- */
+/* ------------------------------- Init ------------------------------- */
+/* -------------------------------------------------------------------- */
 
 void Renderer::initGlfw(WindowSettings windowSettings) {
     glfwInit();
@@ -152,7 +292,7 @@ void Renderer::initSwapchain(WindowSettings windowSettings) {
 		1
 	};
 
-	// Hardcoding the draw format to 32 bit float
+	// Hardcoding the draw format to 16 bit float per channel
 	m_drawImage.imageFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 	m_drawImage.imageExtent = drawImageExtent;
 
@@ -264,61 +404,296 @@ void Renderer::initSyncStructures() {
 }
 
 /*
-* Currently this is very provisional. Nothing in this scales, and will have
-* to be generalized to correctly work with the moss philosophy.
-*/
-void Renderer::initDescriptors(Bindings bindings) {
-	// Create a descriptor pool that will hold 10 sets with 1 image each
-	std::vector<utils::interface::DescriptorAllocator::PoolSizeRatio> sizes = {
-		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 }
-	};
+ * One image per SimImage entity (density, velocity, pressure, ...). Same
+ * generic AllocatedImage shape as the draw image, sized to match it.
+ * Storage + sampled so a pass can write it as a storage image and the display
+ * pass can sample it. Layout transition + zero-clear happens once, in
+ * drawPasses(), because the sim state must survive from frame to frame.
+ */
+void Renderer::initImages(const std::vector<ImageConfig>& configs) {
+    for (const ImageConfig& config : configs) {
+        if (config.name.empty() || config.name == DRAW_IMAGE_NAME)
+            throw std::runtime_error("SimImage name '" + config.name + "' is reserved/empty");
+        if (m_images.count(config.name))
+            throw std::runtime_error("Duplicate SimImage name '" + config.name + "'");
 
-	m_descriptors.allocator.init(m_foundation.device, 10, sizes);
+        AllocatedImage image = {};
+        image.imageFormat = config.format;
+        image.imageExtent = m_drawImage.imageExtent;
+        image.drawExtent = VkExtent2D{ image.imageExtent.width, image.imageExtent.height };
 
-	// Fetch info and make the descriptor set layout for our compute draw
-	{
-        VkDescriptorSetLayoutCreateInfo info = utils::info::descriptorSetLayoutCreate(
-            bindings.bindings,
-            VK_SHADER_STAGE_COMPUTE_BIT
+        VkImageUsageFlags usages{};
+        usages |= VK_IMAGE_USAGE_STORAGE_BIT;
+        usages |= VK_IMAGE_USAGE_SAMPLED_BIT;
+        usages |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        usages |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+        VkImageCreateInfo imageInfo = utils::info::imageCreate(
+            image.imageFormat, usages, image.imageExtent
         );
-        VK_CHECK(vkCreateDescriptorSetLayout(
-            m_foundation.device,
-            &info,
-            nullptr,
-            &m_descriptors.drawImageLayout
+
+        VmaAllocationCreateInfo allocInfo = {};
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+        allocInfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        VK_CHECK(vmaCreateImage(
+            m_allocator, &imageInfo, &allocInfo, &image.image, &image.allocation, nullptr
         ));
-	}
 
-	// Allocate a descriptor set for our draw image
-	m_descriptors.drawImage = m_descriptors.allocator.allocate(
-        m_foundation.device,
-        m_descriptors.drawImageLayout
+        VkImageViewCreateInfo viewInfo = utils::info::imageViewCreate(
+            image.imageFormat, image.image, VK_IMAGE_ASPECT_COLOR_BIT
+        );
+        VK_CHECK(vkCreateImageView(
+            m_foundation.device, &viewInfo, nullptr, &image.imageView
+        ));
+
+        m_images.emplace(config.name, image);
+
+        m_dqueue.push([this, image]() {
+            vkDestroyImageView(m_foundation.device, image.imageView, nullptr);
+            vmaDestroyImage(m_allocator, image.image, image.allocation);
+        });
+    }
+}
+
+/*
+ * Builds, for EVERY pass entity, its own descriptor set layout + descriptor
+ * set (two sets when the pass ping-pongs). Pipelines are built afterwards in
+ * initPipelines() from the layouts created here. m_passes ends up in the same
+ * (PassOrder-sorted) order as `configs`.
+ */
+void Renderer::initDescriptors(const std::vector<PassConfig>& configs) {
+    // Shared sampler for COMBINED_IMAGE_SAMPLER bindings
+    VkSamplerCreateInfo samplerInfo = {};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    VK_CHECK(vkCreateSampler(
+        m_foundation.device, &samplerInfo, nullptr, &m_descriptors.sampler
+    ));
+    m_dqueue.push([this]() {
+        vkDestroySampler(m_foundation.device, m_descriptors.sampler, nullptr);
+    });
+
+    if (configs.empty()) return; // nothing to draw; no pool needed
+
+    // Size the pool: total sets, and per descriptor type the largest count any
+    // single set needs (integral "ratios", so ratio * maxSets is exact).
+    u32 totalSets = 0;
+    std::map<VkDescriptorType, u32> maxPerSet;
+    for (const PassConfig& config : configs) {
+        totalSets += config.pingPong ? 2 : 1;
+
+        std::map<VkDescriptorType, u32> perSet;
+        for (const VkDescriptorSetLayoutBinding& b : config.layout)
+            perSet[b.descriptorType] += b.descriptorCount;
+        for (const auto& [type, count] : perSet)
+            maxPerSet[type] = std::max(maxPerSet[type], count);
+    }
+
+    std::vector<utils::interface::DescriptorAllocator::PoolSizeRatio> sizes;
+    for (const auto& [type, count] : maxPerSet)
+        sizes.push_back({ type, float(count) });
+    if (sizes.empty()) // passes with no bindings at all; pools may not be empty
+        sizes.push_back({ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1.0f });
+
+    m_descriptors.allocator.init(m_foundation.device, totalSets, sizes);
+    m_dqueue.push([this]() {
+        m_descriptors.allocator.destroy(m_foundation.device);
+    });
+
+    for (const PassConfig& config : configs) {
+        CompiledPass pass = {};
+        pass.order = config.order;
+        pass.kind = config.kind;
+        pass.repeat = config.repeat;
+        pass.groupX = config.groupX;
+        pass.groupY = config.groupY;
+        pass.groupZ = config.groupZ;
+        pass.vertexCount = config.vertexCount;
+        pass.instanceCount = config.instanceCount;
+        pass.setCount = config.pingPong ? 2 : 1;
+
+        VkShaderStageFlags stages = (config.kind == PipelineKind::Compute)
+            ? VK_SHADER_STAGE_COMPUTE_BIT
+            : (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+
+        pass.setLayout = utils::createDescriptorSetLayout(
+            m_foundation.device, config.layout, stages
+        );
+        m_dqueue.push([this, layout = pass.setLayout]() {
+            vkDestroyDescriptorSetLayout(m_foundation.device, layout, nullptr);
+        });
+
+        // Set 0 = bindings as declared. Set 1 (ping-pong only) = names swapped.
+        std::unordered_set<std::string> touched;
+        for (u32 s = 0; s < pass.setCount; s++) {
+            pass.sets[s] = m_descriptors.allocator.allocate(m_foundation.device, pass.setLayout);
+            writeDescriptorSet(pass.sets[s], config, s == 1);
+
+            for (const Binding& b : config.resources)
+                touched.insert(bindingKey(config, b, s == 1));
+        }
+        pass.touched.assign(touched.begin(), touched.end());
+
+        // Stages/accesses used when this pass is the source/destination of a barrier
+        if (config.kind == PipelineKind::Compute) {
+            pass.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            pass.writeAccess = VK_ACCESS_2_SHADER_WRITE_BIT;
+            pass.readWriteAccess = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+        } else {
+            pass.stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT
+                       | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                       | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            pass.writeAccess = VK_ACCESS_2_SHADER_WRITE_BIT
+                             | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            pass.readWriteAccess = VK_ACCESS_2_SHADER_READ_BIT
+                                 | VK_ACCESS_2_SHADER_WRITE_BIT
+                                 | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT
+                                 | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        }
+
+        m_passes.push_back(std::move(pass));
+    }
+}
+
+void Renderer::initPipelines(const std::vector<PassConfig>& configs) {
+    utils::interface::PipelineBuilder builder(m_foundation.device);
+
+    for (size_t i = 0; i < configs.size(); i++) {
+        const PassConfig& config = configs[i];
+        CompiledPass& pass = m_passes[i];
+
+        utils::interface::BuiltPipeline built;
+        if (config.kind == PipelineKind::Compute) {
+            built = builder.buildCompute(config.computePath, pass.setLayout);
+        } else {
+            PipelineState state(
+                config.topology, config.cullMode, config.frontFace, config.blendEnable
+            );
+            // Graphics passes always render into the draw image
+            built = builder.buildGraphics(
+                config.vertexPath, config.fragmentPath, pass.setLayout,
+                state, m_drawImage.imageFormat
+            );
+        }
+
+        pass.pipeline = built.pipeline;
+        pass.layout = built.layout;
+
+        m_dqueue.push([this, built]() {
+            vkDestroyPipeline(m_foundation.device, built.pipeline, nullptr);
+            vkDestroyPipelineLayout(m_foundation.device, built.layout, nullptr);
+        });
+    }
+}
+
+/* -------------------------------------------------------------------- */
+/* ----------------------- Descriptor-write helpers ------------------- */
+/* -------------------------------------------------------------------- */
+
+/*
+ * Resolves a binding to a unique resource key. Image bindings resolve to an
+ * image name ("" -> "draw"); on the swapped ping-pong set the pair's two names
+ * trade places. Used for descriptor writes AND for barrier hazard tracking.
+ */
+std::string Renderer::bindingKey(
+    const PassConfig& config,
+    const Binding& binding,
+    bool swapped
+) const {
+    if (binding.type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
+        binding.type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+        return "buffer:" + std::to_string((uint64_t)binding.buffer);
+    }
+
+    std::string name = binding.resource.empty() ? std::string(DRAW_IMAGE_NAME) : binding.resource;
+    if (swapped && config.pingPong) {
+        if (name == config.pingA) name = config.pingB;
+        else if (name == config.pingB) name = config.pingA;
+    }
+    return name;
+}
+
+const Renderer::AllocatedImage& Renderer::resolveImage(const std::string& key) const {
+    if (key == DRAW_IMAGE_NAME) return m_drawImage;
+
+    auto it = m_images.find(key);
+    if (it == m_images.end())
+        throw std::runtime_error(
+            "Binding references image '" + key + "' but no SimImage entity has that name"
+        );
+    return it->second;
+}
+
+void Renderer::writeDescriptorSet(VkDescriptorSet set, const PassConfig& config, bool swapped) {
+    // reserve() so the pointers handed to the writes below never get invalidated
+    std::vector<VkDescriptorImageInfo> imageInfos;
+    std::vector<VkDescriptorBufferInfo> bufferInfos;
+    imageInfos.reserve(config.resources.size());
+    bufferInfos.reserve(config.resources.size());
+
+    std::vector<VkWriteDescriptorSet> writes;
+    writes.reserve(config.resources.size());
+
+    for (const Binding& binding : config.resources) {
+        VkWriteDescriptorSet write = {};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.pNext = nullptr;
+        write.dstSet = set;
+        write.dstBinding = binding.index;
+        write.descriptorCount = 1;
+        write.descriptorType = binding.type;
+
+        switch (binding.type) {
+        case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+        case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
+            const AllocatedImage& image = resolveImage(bindingKey(config, binding, swapped));
+
+            VkDescriptorImageInfo info = {};
+            info.imageView = image.imageView;
+            info.imageLayout = VK_IMAGE_LAYOUT_GENERAL; // images stay in GENERAL during passes
+            info.sampler = (binding.type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                ? m_descriptors.sampler
+                : VK_NULL_HANDLE;
+
+            imageInfos.push_back(info);
+            write.pImageInfo = &imageInfos.back();
+            break;
+        }
+        case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+        case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
+            if (binding.buffer == VK_NULL_HANDLE)
+                throw std::runtime_error("Buffer binding has no VkBuffer");
+
+            VkDescriptorBufferInfo info = {};
+            info.buffer = binding.buffer;
+            info.offset = binding.offset;
+            info.range = binding.range;
+
+            bufferInfos.push_back(info);
+            write.pBufferInfo = &bufferInfos.back();
+            break;
+        }
+        default:
+            throw std::runtime_error("Unsupported descriptor type in Binding");
+        }
+
+        writes.push_back(write);
+    }
+
+    vkUpdateDescriptorSets(
+        m_foundation.device, (u32)writes.size(), writes.data(), 0, nullptr
     );
+}
 
-	// Update descriptor sets with the current screen
-	VkDescriptorImageInfo imgInfo = {};
-	imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-	imgInfo.imageView = m_drawImage.imageView;
-	
-	VkWriteDescriptorSet drawImageWrite = {};
-	drawImageWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	drawImageWrite.pNext = nullptr;
-	
-	drawImageWrite.dstBinding = 0;
-	drawImageWrite.dstSet = m_descriptors.drawImage;
-	drawImageWrite.descriptorCount = 1;
-	drawImageWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	drawImageWrite.pImageInfo = &imgInfo;
-
-	vkUpdateDescriptorSets(m_foundation.device, 1, &drawImageWrite, 0, nullptr);
-
-	// Descriptor allocator and the new layout get pushed to dqueue
-	m_dqueue.push([&]() {
-	    m_descriptors.allocator.destroy(m_foundation.device);
-
-		vkDestroyDescriptorSetLayout(m_foundation.device, m_descriptors.drawImageLayout, nullptr);
-	});
-};
+/* -------------------------------------------------------------------- */
+/* ------------------------------- Draw ------------------------------- */
+/* -------------------------------------------------------------------- */
 
 void Renderer::draw() {
 	// Wait until the gpu has finished rendering the last frame.
@@ -365,8 +740,8 @@ void Renderer::draw() {
         cmd, m_drawImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL
     );
 
-    // Draw the sinoidal background
-	drawBackground(cmd);
+    // Run every pass entity, in PassOrder (replaces drawBackground)
+	drawPasses(cmd);
 
 	// Transition the draw image and the swapchain image into their correct transfer layouts
 	utils::transitionImage(
@@ -442,23 +817,95 @@ void Renderer::draw() {
 	m_update.frameNumber++;
 }
 
-void Renderer::drawBackground(VkCommandBuffer cmd) {
-    VkClearColorValue clearValue;
-    float flash = std::abs(std::sin(m_update.frameNumber / 120.f));
-    clearValue = { { 0.0f, 0.0f, flash, 1.0f } };
+/*
+ * Runs every CompiledPass in order, repeating each PassRepeat times.
+ *
+ * Everything here reads/writes m_drawImage or SimImages while they are in
+ * GENERAL (draw() puts the draw image there before calling us; sim images are
+ * put there once below). Graphics passes render INTO m_drawImage with dynamic
+ * rendering, also in GENERAL.
+ *
+ * Barriers (linear, no frame graph): we remember which resources have been
+ * touched since the last barrier. When a pass touches one of them again
+ * (including a repeat of itself), we emit one memory barrier covering
+ * everything pending, then carry on.
+ */
+void Renderer::drawPasses(VkCommandBuffer cmd) {
+    // One-time: sim images -> GENERAL and zeroed. Never transitioned from
+    // UNDEFINED again, so their contents persist across frames.
+    if (!m_simImagesReady) {
+        VkClearColorValue zero = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+        VkImageSubresourceRange range = utils::mask::subresourceRange(VK_IMAGE_ASPECT_COLOR_BIT);
 
-    VkImageSubresourceRange clearRange = utils::mask::subresourceRange(
-        VK_IMAGE_ASPECT_COLOR_BIT
-    );
+        for (auto& entry : m_images) {
+            utils::transitionImage(
+                cmd, entry.second.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL
+            );
+            vkCmdClearColorImage(
+                cmd, entry.second.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range
+            );
+        }
+        m_simImagesReady = true;
+    }
 
-    vkCmdClearColorImage(
+    // Covers the previous frame's passes (sim state is read again this frame)
+    // and the one-time init above.
+    utils::memoryBarrier(
         cmd,
-        m_drawImage.image,              // the actual compute-target image
-        VK_IMAGE_LAYOUT_GENERAL,        // matches the transition done right before this call
-        &clearValue,
-        1,
-        &clearRange
+        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT
     );
+
+    std::unordered_set<std::string> pending;
+    VkPipelineStageFlags2 pendingStages = 0;
+    VkAccessFlags2 pendingWrites = 0;
+
+    for (const CompiledPass& pass : m_passes) {
+        for (u32 i = 0; i < pass.repeat; i++) {
+            bool hazard = false;
+            for (const std::string& key : pass.touched) {
+                if (pending.count(key)) { hazard = true; break; }
+            }
+
+            if (hazard) {
+                utils::memoryBarrier(
+                    cmd,
+                    pendingStages, pendingWrites,
+                    pass.stage, pass.readWriteAccess
+                );
+                pending.clear();
+                pendingStages = 0;
+                pendingWrites = 0;
+            }
+
+            pending.insert(pass.touched.begin(), pass.touched.end());
+            pendingStages |= pass.stage;
+            pendingWrites |= pass.writeAccess;
+
+            // Ping-pong passes alternate descriptor sets per iteration
+            VkDescriptorSet set = pass.sets[pass.setCount > 1 ? (i % 2) : 0];
+
+            if (pass.kind == PipelineKind::Compute) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pass.pipeline);
+                vkCmdBindDescriptorSets(
+                    cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pass.layout, 0, 1, &set, 0, nullptr
+                );
+                vkCmdDispatch(cmd, pass.groupX, pass.groupY, pass.groupZ);
+            } else {
+                utils::beginRendering(
+                    cmd, m_drawImage.imageView, VK_IMAGE_LAYOUT_GENERAL, m_drawImage.drawExtent
+                );
+                utils::setViewportScissor(cmd, m_drawImage.drawExtent);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pass.pipeline);
+                vkCmdBindDescriptorSets(
+                    cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pass.layout, 0, 1, &set, 0, nullptr
+                );
+                vkCmdDraw(cmd, pass.vertexCount, pass.instanceCount, 0, 0);
+                vkCmdEndRendering(cmd);
+            }
+        }
+    }
 }
 
 void Renderer::cleanup() {
@@ -475,7 +922,7 @@ void Renderer::cleanup() {
             m_frames[i].dqueue.flush(); // flush per frame data
         }
 
-        m_dqueue.flush(); // flush game data
+        m_dqueue.flush(); // flush game data (pipelines, layouts, pool, sampler, images)
 
         // Destroy seperatly allocated per swapchain image render semaphore
         for (auto& sem : m_renderSemaphore)
