@@ -110,4 +110,7 @@ void copyImage(
     VkExtent2D dstSize
 );
 
+// Global ALL_COMMANDS memory barrier. First call of every attachment's recording.
+void syncAll(VkCommandBuffer cmd);
+
 } // namespace moss::ext::vulkan::utils

@@ -1,5 +1,6 @@
 #include "moss/extensions/vulkan/utils.hpp"
 #include "moss/extensions/vulkan/logs.hpp"
+#include "moss/extensions/vulkan/pipelines.hpp"
 
 namespace moss::extensions::vulkan::utils {
 
@@ -333,6 +334,15 @@ void copyImage(
 	blitInfo.pRegions = &blitRegion;
 
 	vkCmdBlitImage2(cmd, &blitInfo);
+}
+
+void syncAll(VkCommandBuffer cmd) {
+    memoryBarrier(
+        cmd,
+        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT
+    );
 }
 
 } // namespace moss::ext::vulkan::utils
