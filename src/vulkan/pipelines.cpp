@@ -2,7 +2,6 @@
 #include "moss/extensions/vulkan/logs.hpp"
 
 #include <fstream>
-#include <stdexcept>
 
 namespace moss::extensions::vulkan::utils {
 
@@ -34,10 +33,11 @@ namespace interface {
 
 BuiltPipeline PipelineBuilder::buildCompute(
     const std::string& computePath,
-    VkDescriptorSetLayout setLayout
+    VkDescriptorSetLayout setLayout,
+    const VkPushConstantRange* push
 ) const {
     VkShaderModule computeModule = createShaderModule(m_device, computePath);
-    VkPipelineLayout layout = createPipelineLayout(m_device, setLayout);
+    VkPipelineLayout layout = createPipelineLayout(m_device, setLayout, push);
 
     VkComputePipelineCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -58,12 +58,13 @@ BuiltPipeline PipelineBuilder::buildGraphics(
     const std::string& vertexPath,
     const std::string& fragmentPath,
     VkDescriptorSetLayout setLayout,
-    const PipelineState& state,
-    VkFormat colorFormat
+    const GraphicsState& state,
+    VkFormat colorFormat,
+    const VkPushConstantRange* push
 ) const {
     VkShaderModule vertModule = createShaderModule(m_device, vertexPath);
     VkShaderModule fragModule = createShaderModule(m_device, fragmentPath);
-    VkPipelineLayout layout = createPipelineLayout(m_device, setLayout);
+    VkPipelineLayout layout = createPipelineLayout(m_device, setLayout, push);
 
     VkPipelineShaderStageCreateInfo stages[2] = {
         info::shaderStage(VK_SHADER_STAGE_VERTEX_BIT, vertModule),
@@ -186,11 +187,11 @@ VkDescriptorSetLayout createDescriptorSetLayout(
 VkShaderModule createShaderModule(VkDevice device, const std::string& path) {
     std::ifstream file(path, std::ios::ate | std::ios::binary);
     if (!file.is_open())
-        throw std::runtime_error("Cannot open SPIR-V file '" + path + "'");
+        M_FATAL("Cannot open SPIR-V file '{}'", path);
 
     const size_t byteSize = static_cast<size_t>(file.tellg());
     if (byteSize == 0 || byteSize % sizeof(u32) != 0)
-        throw std::runtime_error("'" + path + "' is not valid SPIR-V (bad size)");
+        M_FATAL("'{}' is not valid SPIR-V (bad size: {} bytes)", path, byteSize);
 
     std::vector<u32> code(byteSize / sizeof(u32));
     file.seekg(0);
@@ -207,12 +208,20 @@ VkShaderModule createShaderModule(VkDevice device, const std::string& path) {
     return module;
 }
 
-VkPipelineLayout createPipelineLayout(VkDevice device, VkDescriptorSetLayout setLayout) {
+VkPipelineLayout createPipelineLayout(
+    VkDevice device,
+    VkDescriptorSetLayout setLayout,
+    const VkPushConstantRange* push
+) {
+    const bool hasSet = setLayout != VK_NULL_HANDLE;
+
     VkPipelineLayoutCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     info.pNext = nullptr;
-    info.setLayoutCount = 1;
-    info.pSetLayouts = &setLayout; // setLayout is a by-value param, alive for the call
+    info.setLayoutCount = hasSet ? 1 : 0;
+    info.pSetLayouts = hasSet ? &setLayout : nullptr; // setLayout is a by-value param, alive for the call
+    info.pushConstantRangeCount = push != nullptr ? 1 : 0;
+    info.pPushConstantRanges = push;
 
     VkPipelineLayout layout;
     VK_CHECK(vkCreatePipelineLayout(device, &info, nullptr, &layout));

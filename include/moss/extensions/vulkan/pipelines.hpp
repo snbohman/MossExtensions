@@ -1,7 +1,6 @@
 #pragma once
 
 #include "moss/extensions/vulkan/meta.hpp"
-#include "moss/extensions/vulkan/components.hpp"
 
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
@@ -35,11 +34,29 @@ struct BuiltPipeline {
 };
 
 /*
+ * Minimal fixed-function state for the graphics pipeline. Plain data with no
+ * moss dependency, so the generic builder does not know about pass components
+ * (the PipelineState component wraps this). Defaults describe the fullscreen
+ * triangle: no vertex input (gl_VertexIndex), no depth test, no culling, no
+ * blending. The colour format is passed separately (the draw image's).
+ */
+struct GraphicsState {
+    VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkCullModeFlags     cullMode = VK_CULL_MODE_NONE;
+    VkFrontFace         frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    bool                blendEnable = false;
+};
+
+/*
  * Loads SPIR-V -> VkShaderModule -> VkPipelineLayout (from an existing
  * descriptor set layout) -> vkCreateComputePipelines / vkCreateGraphicsPipelines.
  * Graphics pipelines use dynamic rendering (VkPipelineRenderingCreateInfo),
  * dynamic viewport/scissor, and no vertex input. Shader modules are destroyed
  * before returning. The caller owns the returned pipeline + layout.
+ *
+ * setLayout == VK_NULL_HANDLE means "no bindings": the pipeline layout then
+ * has zero set layouts. When `push` is non-null it adds one push-constant
+ * range to the layout.
  */
 class PipelineBuilder {
 public:
@@ -47,15 +64,17 @@ public:
 
     BuiltPipeline buildCompute(
         const std::string& computePath,
-        VkDescriptorSetLayout setLayout
+        VkDescriptorSetLayout setLayout,
+        const VkPushConstantRange* push = nullptr
     ) const;
 
     BuiltPipeline buildGraphics(
         const std::string& vertexPath,
         const std::string& fragmentPath,
         VkDescriptorSetLayout setLayout,
-        const PipelineState& state,
-        VkFormat colorFormat
+        const GraphicsState& state,
+        VkFormat colorFormat,
+        const VkPushConstantRange* push = nullptr
     ) const;
 
 private:
@@ -75,8 +94,14 @@ VkDescriptorSetLayout createDescriptorSetLayout(
     VkShaderStageFlags shaderStages
 );
 
+// Logs the path and aborts when the file is missing or not valid SPIR-V.
 VkShaderModule createShaderModule(VkDevice device, const std::string& path);
-VkPipelineLayout createPipelineLayout(VkDevice device, VkDescriptorSetLayout setLayout);
+
+VkPipelineLayout createPipelineLayout(
+    VkDevice device,
+    VkDescriptorSetLayout setLayout,
+    const VkPushConstantRange* push = nullptr
+);
 
 // Global execution + memory dependency (synchronization2).
 void memoryBarrier(

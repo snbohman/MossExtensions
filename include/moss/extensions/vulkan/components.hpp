@@ -3,200 +3,142 @@
 #include <moss/extensions/vulkan/meta.hpp>
 #include <vulkan/vulkan_core.h>
 
+#include <concepts>
 #include <string>
 #include <utility>
 #include <vector>
 
-// Example (see bottom of file for a complete fluid-sim style setup):
-//
-// mirror
-//     .create() // Compute pass
-//         .attach<mvk::Pass>()
-//         .attach<mvk::Shader<mvk::PipelineKind::Compute>>()
-//         .attach<mvk::PassOrder>(0)
-//         .attach<mvk::ComputeShader>("shaders/diffuse.comp.spv")
-//         .attach<mvk::GridDispatch>(80, 45, 1)
-//         .attach<mvk::Bindings>(std::vector<mvk::Binding>{
-//             {0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, "fieldA"},
-//             {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, "fieldB"}
-//         })
-//     .create() // Display pass
-//         .attach<mvk::Pass>()
-//         .attach<mvk::Shader<mvk::PipelineKind::Graphics>>()
-//         .attach<mvk::PassOrder>(100)
-//         .attach<mvk::VertexShader>("shaders/fullscreen.vert.spv")
-//         .attach<mvk::FragmentShader>("shaders/display.frag.spv")
-//         .attach<mvk::PipelineState>()
-//         .attach<mvk::DrawCall>()
-//         .attach<mvk::Bindings>(std::vector<mvk::Binding>{
-//             {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, "fieldA"}
-//         })
+/*
+ * Core settings and requirement components. Image and pass components live in
+ * attachments/images/components.hpp and attachments/passes/components.hpp.
+ *
+ * Example (a fluid-style setup, mechanics only; shader files are yours):
+ *
+ * mirror
+ *     .connect<vk::Core, vk::FrameBegin, vk::ImageSystem, vk::PassSystem, vk::FrameEnd>()
+ *     .create()
+ *         .attach<vk::WindowSettings>("moss", 1280, 720)
+ *         .attach<vk::RendererSettings>(true)
+ *     .create().attach<vk::SimImage>("pressure").attach<vk::DoubleBuffered>()
+ *     .create().attach<vk::SimImage>("divergence")
+ *     .create()   // pressure solve, 20 iterations, the sides swap after each
+ *         .attach<vk::ComputeShader>("shaders/jacobi.comp.spv")
+ *         .attach<vk::Bind>(
+ *             vk::sample(0, "pressure"), vk::sample(1, "divergence"), vk::write(2, "pressure")
+ *         )
+ *         .attach<vk::Dispatch>("pressure")
+ *         .attach<vk::Repeat>(20u)
+ *     .create()   // display
+ *         .attach<vk::VertexShader>("shaders/fullscreen.vert.spv")
+ *         .attach<vk::FragmentShader>("shaders/display.frag.spv")
+ *         .attach<vk::Bind>(vk::sample(0, "pressure"));
+ */
 
 namespace moss::extensions::vulkan {
 
-struct RendererSettings : public Component {
-    RendererSettings(bool useVL) : validationLayers(useVL) { }
-    bool validationLayers;
-};
+/* ------------------------------------------------------------------------ */
+/* ---------------------------- Core settings ----------------------------- */
+/* ------------------------------------------------------------------------ */
 
+/*
+ * Exactly one entity in the Context carries both WindowSettings and
+ * RendererSettings (Core warns when there are more and uses the first).
+ */
 struct WindowSettings : public Component {
-    WindowSettings(const char* t, i32 w, i32 h, i32 fps, bool r)
+    WindowSettings(const char* t, i32 w, i32 h, i32 fps = 60, bool r = false)
         : title(t), width(w), height(h), targetFPS(fps), resize(r) { }
+
     const char* title;
     u32 width;
     u32 height;
-    u32 targetFPS;
+    u32 targetFPS;   // reserved, unused: there is no frame limiting yet
     bool resize;
 };
 
+/*
+ * Core-wide overrides, as defaulted constructor parameters. Present mode and
+ * swapchain format are DESIRED, not required: vk-bootstrap falls back (FIFO is
+ * always available) and Core reads the real swapchain format back. The draw
+ * format is checked: it must support storage image, colour attachment, sampled
+ * image with linear filter and blit source, or Core aborts with a message.
+ */
+struct RendererSettings : public Component {
+    RendererSettings(
+        bool vl = true,
+        VkPresentModeKHR pm = VK_PRESENT_MODE_FIFO_KHR,
+        VkFormat draw = VK_FORMAT_R16G16B16A16_SFLOAT,
+        VkFormat swapchain = VK_FORMAT_B8G8R8A8_UNORM
+    ) : validationLayers(vl), presentMode(pm), drawFormat(draw), swapchainFormat(swapchain) { }
+
+    bool validationLayers;
+    VkPresentModeKHR presentMode;
+    VkFormat drawFormat;
+    VkFormat swapchainFormat;
+};
+
 /* ------------------------------------------------------------------------ */
-/* ------------------------- Resource binding data ------------------------ */
+/* ------------------------ Requirement components ------------------------ */
 /* ------------------------------------------------------------------------ */
 
 /*
- * One descriptor slot plus WHAT goes in it.
+ * Any entity in the Context may carry these; Core::build collects all of them
+ * before creating the instance and device. Duplicate extension names are
+ * de-duplicated and feature structs are OR-merged.
  *
- * Images are referenced by NAME, not by handle: entities are built before the
- * Vulkan device exists, so the Renderer resolves the name at descriptor-write
- * time. Names resolve to either
- *   - "" or "draw"   -> the renderer's draw image (m_drawImage), or
- *   - a SimImage name -> an image created from a SimImage entity.
- * Buffers are carried as real handles (they are not renderer-owned yet).
- *
- * Supported types: STORAGE_IMAGE, COMBINED_IMAGE_SAMPLER (shared linear/clamp
- * sampler owned by the renderer), UNIFORM_BUFFER, STORAGE_BUFFER.
- *
- * Aggregate with defaults on purpose: the old `{index, type}` form still works.
+ * The extension components take any number of names. The constraint keeps the
+ * variadic constructor from hijacking copy construction (attach passes
+ * lvalues, so a copy would otherwise match N&& with N = Self&).
  */
-struct Binding {
-    u32 index;
-    VkDescriptorType type;
-    std::string resource = "";
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceSize offset = 0;
-    VkDeviceSize range = VK_WHOLE_SIZE;
+struct RequireInstanceExtension : public Component {
+    template<std::convertible_to<std::string>... N>
+    requires(sizeof...(N) > 0)
+    explicit RequireInstanceExtension(N&&... ns)
+        : names{ std::string(std::forward<N>(ns))... } { }
+
+    std::vector<std::string> names;
 };
 
-class Bindings : public moss::Component {
-public:
-    Bindings(std::vector<Binding> binds) : resources(std::move(binds)) {
-        this->bindings.reserve(resources.size());
-        for (const Binding& b : resources) {
-            this->bindings.push_back(VkDescriptorSetLayoutBinding{
-                .binding = b.index,
-                .descriptorType = b.type,
-                .descriptorCount = 1,
-                // Stage flags are OR'd in per pipeline kind when the layout is built
-                .stageFlags = 0,
-                .pImmutableSamplers = nullptr
-            });
-        }
+struct RequireDeviceExtension : public Component {
+    template<std::convertible_to<std::string>... N>
+    requires(sizeof...(N) > 0)
+    explicit RequireDeviceExtension(N&&... ns)
+        : names{ std::string(std::forward<N>(ns))... } { }
+
+    std::vector<std::string> names;
+};
+
+/*
+ * Feature requirements. Pass a named struct (or a designated-initialiser
+ * temporary), not a bare braced list: attach cannot forward those.
+ * Vulkan 1.1/1.2/1.3 structs get sType forced and pNext cleared.
+ */
+struct RequireFeatures10 : public Component {
+    explicit RequireFeatures10(VkPhysicalDeviceFeatures f) : features(f) { }
+    VkPhysicalDeviceFeatures features;
+};
+
+struct RequireFeatures11 : public Component {
+    explicit RequireFeatures11(VkPhysicalDeviceVulkan11Features f) : features(f) {
+        features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        features.pNext = nullptr;
     }
-
-    std::vector<VkDescriptorSetLayoutBinding> bindings; // layout side (same order as resources)
-    std::vector<Binding> resources;                     // resource side
+    VkPhysicalDeviceVulkan11Features features;
 };
 
-/*
- * Creates a storage+sampled image the size of the draw image, named so that
- * Bindings / PingPong can refer to it. Zero-initialised once, then persistent
- * across frames (this is where sim state lives).
- */
-struct SimImage : public Component {
-    SimImage(std::string n, VkFormat f = VK_FORMAT_R16G16B16A16_SFLOAT)
-        : name(std::move(n)), format(f) { }
-    std::string name;
-    VkFormat format;
+struct RequireFeatures12 : public Component {
+    explicit RequireFeatures12(VkPhysicalDeviceVulkan12Features f) : features(f) {
+        features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        features.pNext = nullptr;
+    }
+    VkPhysicalDeviceVulkan12Features features;
 };
 
-/* ------------------------------------------------------------------------ */
-/* ------------------------- Pipeline kind components --------------------- */
-/* ------------------------------------------------------------------------ */
-
-enum class PipelineKind { Compute, Graphics };
-
-// Tag: categorises an entity's pipeline as compute or graphics.
-template<PipelineKind K>
-struct Shader : public Component {
-    static constexpr PipelineKind kind = K;
-};
-
-enum class ShaderStage { Compute, Vertex, Fragment };
-
-// Path to a precompiled SPIR-V file for one stage.
-template<ShaderStage S>
-struct ShaderSource : public Component {
-    ShaderSource(std::string p) : path(std::move(p)) { }
-    std::string path;
-};
-
-using ComputeShader  = ShaderSource<ShaderStage::Compute>;
-using VertexShader   = ShaderSource<ShaderStage::Vertex>;
-using FragmentShader = ShaderSource<ShaderStage::Fragment>;
-
-/*
- * Minimal fixed-function state for the graphics pipeline. Defaults describe
- * the fullscreen triangle: no vertex input (gl_VertexIndex), no depth test,
- * no culling, no blending. The colour format is always the draw image's.
- */
-struct PipelineState : public Component {
-    PipelineState(
-        VkPrimitiveTopology t = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        VkCullModeFlags c = VK_CULL_MODE_NONE,
-        VkFrontFace f = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        bool blend = false
-    ) : topology(t), cullMode(c), frontFace(f), blendEnable(blend) { }
-
-    VkPrimitiveTopology topology;
-    VkCullModeFlags cullMode;
-    VkFrontFace frontFace;
-    bool blendEnable;
-};
-
-/* ------------------------------------------------------------------------ */
-/* ---------------------------- Pass components --------------------------- */
-/* ------------------------------------------------------------------------ */
-
-// Tag: this entity is a pass the renderer should run each frame.
-struct Pass : public Component { };
-
-// Explicit linear ordering. Must be unique per pass (it is also the join key
-// for the optional PassRepeat / PingPong components).
-struct PassOrder : public Component {
-    PassOrder(int o) : order(o) { }
-    int order;
-};
-
-// Compute passes: WORKGROUP COUNTS (not threads). e.g. ceil(width / local_size_x).
-struct GridDispatch : public Component {
-    GridDispatch(u32 gx, u32 gy = 1, u32 gz = 1) : x(gx), y(gy), z(gz) { }
-    u32 x;
-    u32 y;
-    u32 z;
-};
-
-// Graphics pass: defaults are the fullscreen triangle.
-struct DrawCall : public Component {
-    DrawCall(u32 vertices = 3, u32 instances = 1)
-        : vertexCount(vertices), instanceCount(instances) { }
-    u32 vertexCount;
-    u32 instanceCount;
-};
-
-// OPTIONAL: run the pass `count` times back to back (e.g. pressure solve).
-// With PingPong, use an EVEN count so the result ends up back in the first image.
-struct PassRepeat : public Component {
-    PassRepeat(u32 n) : count(n) { }
-    u32 count;
-};
-
-// OPTIONAL: on odd PassRepeat iterations, any binding that names `a` is
-// pointed at `b` and vice versa.
-struct PingPong : public Component {
-    PingPong(std::string first, std::string second)
-        : a(std::move(first)), b(std::move(second)) { }
-    std::string a;
-    std::string b;
+struct RequireFeatures13 : public Component {
+    explicit RequireFeatures13(VkPhysicalDeviceVulkan13Features f) : features(f) {
+        features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        features.pNext = nullptr;
+    }
+    VkPhysicalDeviceVulkan13Features features;
 };
 
 }

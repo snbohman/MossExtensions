@@ -11,7 +11,12 @@ namespace moss::extensions::vulkan {
  * fence, acquire a swapchain image, begin the command buffer, and put the
  * draw image into GENERAL. Fills core.frame for the attachments.
  *
- * Connect it right after Core and before every attachment.
+ * Connect it right after Core and before every attachment:
+ *
+ *     mirror.connect<
+ *         vk::Core, vk::FrameBegin, vk::ImageSystem, vk::PassSystem,
+ *         ...your attachments..., vk::FrameEnd
+ *     >();
  */
 class FrameBegin : public moss::System {
 public:

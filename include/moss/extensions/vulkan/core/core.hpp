@@ -12,10 +12,15 @@ namespace moss::extensions::vulkan {
  * frames in flight, sync objects), publishes it as a moss resource, and tears
  * it down in exit(). Connect it FIRST in a Context:
  *
- *     mirror.connect<vk::Core, vk::FrameBegin, ...attachments..., vk::FrameEnd>();
+ *     mirror.connect<
+ *         vk::Core, vk::FrameBegin, vk::ImageSystem, vk::PassSystem,
+ *         ...your attachments..., vk::FrameEnd
+ *     >();
  *
  * Needs one entity in the same Context carrying WindowSettings and
- * RendererSettings.
+ * RendererSettings. Entities carrying RequireInstanceExtension,
+ * RequireDeviceExtension or RequireFeatures10/11/12/13 are collected before
+ * the instance and device are created.
  */
 class Core : public moss::System {
 public:
@@ -23,9 +28,15 @@ public:
     void exit(const Key<key::WRITE>& key) override;
 
 private:
+    // De-duplicated extensions and OR-merged features (defined in core.cpp)
+    struct Requirements;
+
+    static Requirements collectRequirements(const Key<key::WRITE>& key, const DynamicView& entities);
+    static void diagnoseDevices(VkInstance instance, const Requirements& requirements);
+
     void initGlfw(RenderCore& core, WindowSettings windowSettings);
-    void initVulkan(RenderCore& core, RendererSettings rendererSettings);
-    void initSwapchain(RenderCore& core, WindowSettings windowSettings);
+    void initVulkan(RenderCore& core, RendererSettings rendererSettings, const Requirements& requirements);
+    void initSwapchain(RenderCore& core, WindowSettings windowSettings, RendererSettings rendererSettings);
     void initCommands(RenderCore& core);
     void initSyncStructures(RenderCore& core);
 };

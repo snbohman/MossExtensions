@@ -4,6 +4,12 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
 
+#include <cstdint>
+#include <deque>
+#include <functional>
+#include <span>
+#include <vector>
+
 namespace moss::extensions::vulkan::utils {
 
 /* ------------------------------------------------------ */
@@ -90,7 +96,7 @@ struct DescriptorAllocator {
     VkDescriptorSet allocate(VkDevice device, VkDescriptorSetLayout layout);
 };
 
-}; // namespace interface 
+} // namespace interface
 
 /* ------------------------------------------------------------ */
 /* ------------------------ Non return ------------------------ */
@@ -113,4 +119,4 @@ void copyImage(
 // Global ALL_COMMANDS memory barrier. First call of every attachment's recording.
 void syncAll(VkCommandBuffer cmd);
 
-} // namespace moss::ext::vulkan::utils
+} // namespace moss::extensions::vulkan::utils

@@ -2,21 +2,15 @@
 
 #include "moss/extensions/vulkan/meta.hpp"
 #include "moss/extensions/vulkan/utils.hpp"
+#include "moss/extensions/vulkan/core/allocated_image.hpp"
 
 namespace moss::extensions::vulkan {
 
 /*
- * Generic VMA-backed image + view. Reused for the draw image and for any image
- * an attachment creates.
+ * Reserved resource name of the draw image. SimImage may not use it, and a
+ * Binding with this name resolves to RenderCore::drawImage.
  */
-struct AllocatedImage {
-    VkImage image;
-    VkImageView imageView;
-    VmaAllocation allocation;
-    VkExtent2D drawExtent;
-    VkExtent3D imageExtent;
-    VkFormat imageFormat;
-};
+inline constexpr const char* DRAW_IMAGE_NAME = "draw";
 
 /*
  * The shared state of the Vulkan core. Stored as a moss resource:
