@@ -212,6 +212,114 @@ std::string missingFormatFeatures(VkFormatFeatureFlags have, VkFormatFeatureFlag
     return join(missing);
 }
 
+/* -------------------------------------------------------------------- */
+/* ----------------------- Swapchain-lifetime objects ------------------ */
+/* -------------------------------------------------------------------- */
+
+// The draw image is blitted into the swapchain image, so it must support
+// everything the passes and the blit do with it. The format never changes, so
+// this runs once.
+void checkDrawFormat(VkPhysicalDevice physicalDevice, VkFormat drawFormat) {
+    VkFormatProperties formatProps;
+    vkGetPhysicalDeviceFormatProperties(physicalDevice, drawFormat, &formatProps);
+
+    const VkFormatFeatureFlags needed =
+        VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+        VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+        VK_FORMAT_FEATURE_BLIT_SRC_BIT;
+    if ((formatProps.optimalTilingFeatures & needed) != needed) {
+        M_FATAL(
+            "Draw format {} is not usable on this GPU: it lacks {}",
+            string_VkFormat(drawFormat),
+            missingFormatFeatures(formatProps.optimalTilingFeatures, needed)
+        );
+    }
+}
+
+/*
+ * Builds the swapchain, its image views, the render semaphores and the draw
+ * image into `core`, and pushes their deletors to core.swapchainDqueue. The
+ * swapchain handle itself is NOT in the queue: it must outlive the next
+ * creation (it becomes oldSwapchain), so Core::exit and recreateSwapchain
+ * destroy it explicitly. `old` may be VK_NULL_HANDLE.
+ */
+void buildSwapchainObjects(RenderCore& core, VkExtent2D desired, VkSwapchainKHR old) {
+    VkDevice device = core.foundation.device;
+
+    vkb::SwapchainBuilder swapchainBuilder{
+        core.foundation.physicalDevice,
+        device,
+        core.foundation.surface
+    };
+
+    swapchainBuilder
+        .set_desired_format(VkSurfaceFormatKHR{
+            .format = core.config.swapchainFormat,
+            .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+        })
+        .set_desired_present_mode(core.config.presentMode)
+        .set_desired_extent(desired.width, desired.height)
+        .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    if (old != VK_NULL_HANDLE) swapchainBuilder.set_old_swapchain(old);
+
+    vkb::Swapchain vkbSwapchain = unwrap(swapchainBuilder.build(), "Swapchain creation");
+
+    core.swapchain.extent = vkbSwapchain.extent;
+    core.swapchain.requested = desired;
+    core.swapchain.dirty = false;
+    core.swapchain.swapchain = vkbSwapchain.swapchain;
+    // The desired format is only a wish: vk-bootstrap may have fallen back
+    core.swapchain.imageFormat = vkbSwapchain.image_format;
+    core.swapchain.images = unwrap(vkbSwapchain.get_images(), "Swapchain images");
+    core.swapchain.imageViews = unwrap(vkbSwapchain.get_image_views(), "Swapchain image views");
+
+    // Image views before the swapchain they were created from
+    core.swapchainDqueue.push([device, views = core.swapchain.imageViews]() {
+        for (VkImageView view : views) vkDestroyImageView(device, view, nullptr);
+    });
+
+    /*
+     * One renderSemaphore per swapchain image because swapchain.images.size()
+     * != FRAME_OVERLAP. Indexed by acquired image index. The image count can
+     * change on recreation, so these have swapchain lifetime.
+     */
+    VkSemaphoreCreateInfo semCreateInfo = utils::info::semaphoreCreate(0);
+    core.renderSemaphores.assign(core.swapchain.images.size(), VK_NULL_HANDLE);
+    for (VkSemaphore& sem : core.renderSemaphores) {
+        VK_CHECK(vkCreateSemaphore(device, &semCreateInfo, nullptr, &sem));
+    }
+    core.swapchainDqueue.push([device, semaphores = core.renderSemaphores]() {
+        for (VkSemaphore sem : semaphores) vkDestroySemaphore(device, sem, nullptr);
+    });
+
+    // The draw image follows the ACTUAL swapchain extent, which can differ
+    // from the requested size (HiDPI, clamping)
+    VkImageUsageFlags drawImageUsages{};
+    drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    drawImageUsages |= VK_IMAGE_USAGE_STORAGE_BIT;
+    drawImageUsages |= VK_IMAGE_USAGE_SAMPLED_BIT;          // so "draw" can be sampled
+    drawImageUsages |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+    core.drawImage = utils::createImage(
+        device,
+        core.allocator,
+        core.config.drawFormat,
+        core.swapchain.extent,
+        drawImageUsages
+    );
+
+    // Everything captured by value
+    core.swapchainDqueue.push([device,
+                               allocator = core.allocator,
+                               image = core.drawImage]() {
+        vkDestroyImageView(device, image.imageView, nullptr);
+        vmaDestroyImage(allocator, image.image, image.allocation);
+    });
+}
+
 }
 
 /* -------------------------------------------------------------------- */
@@ -534,76 +642,26 @@ void Core::initSwapchain(
     WindowSettings windowSettings,
     RendererSettings rendererSettings
 ) {
-    vkb::SwapchainBuilder swapchainBuilder{
-        core.foundation.physicalDevice,
-        core.foundation.device,
-        core.foundation.surface
-    };
+    // Kept for every later recreation. Present mode and swapchain format are
+    // DESIRED, not required; the draw format is checked once, here.
+    core.config.presentMode = rendererSettings.presentMode;
+    core.config.swapchainFormat = rendererSettings.swapchainFormat;
+    core.config.drawFormat = rendererSettings.drawFormat;
+    core.config.resizable = windowSettings.resize;
 
-    vkb::Swapchain vkbSwapchain = unwrap(
-        swapchainBuilder
-            .set_desired_format(VkSurfaceFormatKHR{
-                .format = rendererSettings.swapchainFormat,
-                .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
-            })
-            .set_desired_present_mode(rendererSettings.presentMode)
-            .set_desired_extent(windowSettings.width, windowSettings.height)
-            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-            .build(),
-        "Swapchain creation"
-    );
+    checkDrawFormat(core.foundation.physicalDevice, core.config.drawFormat);
 
-    core.swapchain.extent = vkbSwapchain.extent;
-    core.swapchain.swapchain = vkbSwapchain.swapchain;
-    // The desired format is only a wish: vk-bootstrap may have fallen back
-    core.swapchain.imageFormat = vkbSwapchain.image_format;
-    core.swapchain.images = unwrap(vkbSwapchain.get_images(), "Swapchain images");
-    core.swapchain.imageViews = unwrap(vkbSwapchain.get_image_views(), "Swapchain image views");
+    VkExtent2D desired = { windowSettings.width, windowSettings.height };
 
-    // The draw image is blitted into the swapchain image, so it must support
-    // everything the passes and the blit do with it
-    const VkFormat drawFormat = rendererSettings.drawFormat;
-    VkFormatProperties formatProps;
-    vkGetPhysicalDeviceFormatProperties(core.foundation.physicalDevice, drawFormat, &formatProps);
-
-    const VkFormatFeatureFlags needed =
-        VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
-        VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
-        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
-        VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
-        VK_FORMAT_FEATURE_BLIT_SRC_BIT;
-    if ((formatProps.optimalTilingFeatures & needed) != needed) {
-        M_FATAL(
-            "Draw format {} is not usable on this GPU: it lacks {}",
-            string_VkFormat(drawFormat),
-            missingFormatFeatures(formatProps.optimalTilingFeatures, needed)
-        );
+    // A resizable window is compared with its framebuffer size every frame, so
+    // start from that size (it differs from the window size on HiDPI screens)
+    if (windowSettings.resize) {
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(core.foundation.window, &width, &height);
+        if (width > 0 && height > 0) desired = { u32(width), u32(height) };
     }
 
-    // The draw image follows the ACTUAL swapchain extent, which can differ
-    // from the requested window size (HiDPI, clamping)
-    VkImageUsageFlags drawImageUsages{};
-    drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    drawImageUsages |= VK_IMAGE_USAGE_STORAGE_BIT;
-    drawImageUsages |= VK_IMAGE_USAGE_SAMPLED_BIT;          // so "draw" can be sampled
-    drawImageUsages |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-    core.drawImage = utils::createImage(
-        core.foundation.device,
-        core.allocator,
-        drawFormat,
-        core.swapchain.extent,
-        drawImageUsages
-    );
-
-    // Add to deletion queue (everything captured by value)
-    core.dqueue.push([device = core.foundation.device,
-                      allocator = core.allocator,
-                      image = core.drawImage]() {
-        vkDestroyImageView(device, image.imageView, nullptr);
-        vmaDestroyImage(allocator, image.image, image.allocation);
-    });
+    buildSwapchainObjects(core, desired, VK_NULL_HANDLE);
 }
 
 void Core::initCommands(RenderCore& core) {
@@ -640,7 +698,8 @@ void Core::initCommands(RenderCore& core) {
 void Core::initSyncStructures(RenderCore& core) {
     // One fence to control when the gpu has finished rendering the frame,
     // and a semaphore to syncronize rendering with the swapchain.
-    // We want the fence to start signalled so we can wait on it on the first frame
+    // We want the fence to start signalled so we can wait on it on the first frame.
+    // (The per swapchain image render semaphores live with the swapchain.)
     VkFenceCreateInfo fenceCreateInfo = utils::info::fenceCreate(
         VK_FENCE_CREATE_SIGNALED_BIT
     );
@@ -654,15 +713,29 @@ void Core::initSyncStructures(RenderCore& core) {
             core.foundation.device, &semCreateInfo, nullptr, &core.frames[i].swapchainSemaphore
         ));
     }
+}
 
-    /*
-     * Create a seperate renderSemaphore per swapchain image because
-     * swapchain.images.size() != FRAME_OVERLAP. Indexed by acquired image index.
-     */
-    core.renderSemaphores.resize(core.swapchain.images.size());
-    for (auto& sem : core.renderSemaphores) {
-        VK_CHECK(vkCreateSemaphore(core.foundation.device, &semCreateInfo, nullptr, &sem));
-    }
+/* -------------------------------------------------------------------- */
+/* ------------------------------ Resize ------------------------------- */
+/* -------------------------------------------------------------------- */
+
+void recreateSwapchain(RenderCore& core, VkExtent2D desired) {
+    VkDevice device = core.foundation.device;
+
+    // Nothing may still use the old views, semaphores or draw image
+    VK_CHECK(vkDeviceWaitIdle(device));
+
+    VkSwapchainKHR old = core.swapchain.swapchain;
+    core.swapchainDqueue.flush();
+
+    buildSwapchainObjects(core, desired, old);
+    vkDestroySwapchainKHR(device, old, nullptr);
+
+    core.swapchainGeneration++;
+    M_DEB(
+        "Swapchain recreated: {}x{} (generation {})",
+        core.swapchain.extent.width, core.swapchain.extent.height, core.swapchainGeneration
+    );
 }
 
 /*
@@ -690,17 +763,13 @@ void Core::exit(const Key<key::WRITE>& key) {
         vkDestroySemaphore(device, core.frames[i].swapchainSemaphore, nullptr);
     }
 
+    // Swapchain lifetime: image views, render semaphores, draw image (it needs
+    // the allocator, so this comes before dqueue), then the swapchain itself
+    core.swapchainDqueue.flush();
+    vkDestroySwapchainKHR(device, core.swapchain.swapchain, nullptr);
+
     // App lifetime deletors: attachments first, allocator last
     core.dqueue.flush();
-
-    // Separately allocated per swapchain image render semaphores
-    for (auto& sem : core.renderSemaphores)
-        vkDestroySemaphore(device, sem, nullptr);
-
-    // Image views before the swapchain they were created from
-    for (auto& view : core.swapchain.imageViews)
-        vkDestroyImageView(device, view, nullptr);
-    vkDestroySwapchainKHR(device, core.swapchain.swapchain, nullptr);
 
     // Surface and device
     vkDestroySurfaceKHR(core.foundation.instance, core.foundation.surface, nullptr);

@@ -32,9 +32,14 @@ namespace moss::extensions::vulkan {
  * exit of its own.
  *
  * Barriers are linear, not a frame graph: the system remembers which physical
- * images were touched since the last barrier, and when a pass touches one of
- * them again (including a repeat of itself) it emits one memory barrier
- * covering everything pending.
+ * images and buffers were touched since the last barrier, and when a pass
+ * touches one of them again (including a repeat of itself) it emits one memory
+ * barrier covering everything pending.
+ *
+ * Resize: the draw image follows the window. At the start of tick the system
+ * compares core.swapchainGeneration with its own copy; when it differs it
+ * recomputes the group counts of Dispatch("draw") passes and rewrites every
+ * descriptor set that binds "draw".
  */
 class PassSystem : public moss::System {
 public:
@@ -94,8 +99,15 @@ private:
         u32 groupX = 1, groupY = 1, groupZ = 1;
         u32 vertexCount = 3, instanceCount = 1;
 
-        // D: distinct double-buffered images the pass binds. Bit j of a mask is
-        // the current read side of D[j]; the pass has 2^|D| descriptor sets.
+        // Kept for the resize refresh
+        std::vector<Binding> bindings;
+        bool usesDraw = false;               // some image binding is "draw"
+        bool dispatchOnDraw = false;         // Dispatch("draw", ...): groups follow the window
+        u32 localX = 16, localY = 16;
+
+        // D: distinct double-buffered resources (images or buffers) the pass
+        // binds. Bit j of a mask is the current read side of D[j]; the pass has
+        // 2^|D| descriptor sets.
         std::vector<std::string> doubleBuffered;
         std::vector<std::string> written;                   // swapped after each iteration
 
@@ -114,10 +126,14 @@ private:
         const RenderCore& core,
         const GpuResources* gpu,
         const std::unordered_map<std::string, u32>& baseIds,
-        u32 maxPushSize
+        const VkPhysicalDeviceLimits& limits
     );
 
+    // Re-derives everything that depends on the draw image after a resize
+    void refresh(const RenderCore& core, const GpuResources* gpu);
+
     std::vector<CompiledPass> m_passes = {};   // creation order
+    u32 m_generation = 0;                      // RenderCore::swapchainGeneration last seen
 };
 
 }

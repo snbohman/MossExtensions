@@ -7,9 +7,11 @@
 namespace moss::extensions::vulkan {
 
 /*
- * First half of the old Renderer::draw(): poll events, wait for the frame's
- * fence, acquire a swapchain image, begin the command buffer, and put the
- * draw image into GENERAL. Fills core.frame for the attachments.
+ * First half of the old Renderer::draw(): poll events, wait while the window
+ * is minimised, rebuild the swapchain when the window was resized (only when
+ * WindowSettings::resize is true), wait for the frame's fence, acquire a
+ * swapchain image, begin the command buffer, and put the draw image into
+ * GENERAL. Fills core.frame for the attachments.
  *
  * Connect it right after Core and before every attachment:
  *
@@ -25,7 +27,9 @@ public:
 
 /*
  * Second half of the old Renderer::draw(): draw image -> blit into the
- * swapchain image -> present, then advance the frame number.
+ * swapchain image -> present, then advance the frame number. A present that
+ * reports OUT_OF_DATE or SUBOPTIMAL on a resizable window marks the swapchain
+ * for rebuilding at the next FrameBegin.
  *
  * Connect it LAST, after every attachment. It expects the draw image to be in
  * GENERAL.

@@ -1,6 +1,7 @@
 #include "moss/commands/primitives.hpp"
 #include "moss/extensions/vulkan/meta.hpp"
 #include "moss/extensions/vulkan/core/frame.hpp"
+#include "moss/extensions/vulkan/core/core.hpp"
 #include "moss/extensions/vulkan/utils.hpp"
 #include "moss/extensions/vulkan/logs.hpp"
 #include <vulkan/vulkan_core.h>
@@ -10,11 +11,33 @@ namespace moss::extensions::vulkan {
 void FrameBegin::tick(const Key<key::READ>& key) {
     RenderCore& core = cmd::Resource<RenderCore>::init(key).get();
     VkDevice device = core.foundation.device;
+    GLFWwindow* window = core.foundation.window;
 
     // Poll first, then check: otherwise close detection lags one frame
     glfwPollEvents();
-    if (glfwWindowShouldClose(core.foundation.window)) {
+
+    // A minimised window has a 0x0 framebuffer and nothing can be created for
+    // it, so wait here until it is restored (or closed). Waiting in FrameBegin
+    // keeps the attachment contract unchanged: no attachment ever sees it.
+    int fbWidth = 0, fbHeight = 0;
+    glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+    while ((fbWidth == 0 || fbHeight == 0) && !glfwWindowShouldClose(window)) {
+        glfwWaitEvents();
+        glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+    }
+
+    if (glfwWindowShouldClose(window)) {
         cmd::Quit::init(key).quit();
+    }
+
+    // Resize: only when the window is resizable. The swapchain is rebuilt before
+    // the command buffer begins, so the whole frame sees the new draw image.
+    const bool sized = fbWidth > 0 && fbHeight > 0;
+    if (core.config.resizable && sized) {
+        const bool sizeChanged = u32(fbWidth) != core.swapchain.requested.width
+                              || u32(fbHeight) != core.swapchain.requested.height;
+        if (sizeChanged || core.swapchain.dirty)
+            recreateSwapchain(core, VkExtent2D{ u32(fbWidth), u32(fbHeight) });
     }
 
     RenderCore::FrameData& frame = core.currentFrame();
@@ -28,15 +51,29 @@ void FrameBegin::tick(const Key<key::READ>& key) {
 
     VK_CHECK(vkResetFences(device, 1, &frame.renderFence));
 
-    // Requesting image from the swapchain. SUBOPTIMAL is a success code here
-    VK_CHECK_SWAPCHAIN(vkAcquireNextImageKHR(
-        device,
-        core.swapchain.swapchain,
-        1000000000,
-        frame.swapchainSemaphore,
-        nullptr,
-        &core.frame.swapchainImageIndex
-    ));
+    // Requesting image from the swapchain. A failed acquire leaves the semaphore
+    // unsignaled, so on a resizable window OUT_OF_DATE means: rebuild, then retry.
+    // SUBOPTIMAL is a success code here and is left to the present result.
+    VkResult acquired = VK_SUCCESS;
+    for (u32 attempt = 0; attempt < 3; attempt++) {
+        acquired = vkAcquireNextImageKHR(
+            device,
+            core.swapchain.swapchain,
+            1000000000,
+            frame.swapchainSemaphore,
+            nullptr,
+            &core.frame.swapchainImageIndex
+        );
+        if (acquired != VK_ERROR_OUT_OF_DATE_KHR || !core.config.resizable) break;
+
+        glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+        if (fbWidth == 0 || fbHeight == 0)
+            M_FATALF("Swapchain is out of date and the window has no size (closed while minimised)");
+        recreateSwapchain(core, VkExtent2D{ u32(fbWidth), u32(fbHeight) });
+    }
+    if (acquired == VK_ERROR_OUT_OF_DATE_KHR && core.config.resizable)
+        M_FATALF("Swapchain is still out of date after rebuilding it");
+    VK_CHECK_SWAPCHAIN(acquired);
 
     // Resetting the frame's command buffer after waiting for semaphores and fences
     VkCommandBuffer cmdBuf = frame.mainCommandBuffer;
@@ -127,7 +164,15 @@ void FrameEnd::tick(const Key<key::READ>& key) {
     presentInfo.waitSemaphoreCount = 1;
     presentInfo.pImageIndices = &core.frame.swapchainImageIndex;
 
-    VK_CHECK_SWAPCHAIN(vkQueuePresentKHR(core.foundation.graphicsQueue, &presentInfo));
+    // On a resizable window OUT_OF_DATE and SUBOPTIMAL only mark the swapchain
+    // for rebuilding at the next FrameBegin. Otherwise the usual policy applies.
+    VkResult presented = vkQueuePresentKHR(core.foundation.graphicsQueue, &presentInfo);
+    if (core.config.resizable
+        && (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR)) {
+        core.swapchain.dirty = true;
+    } else {
+        VK_CHECK_SWAPCHAIN(presented);
+    }
 
     // Tick the frame number as a final last step
     core.frame.frameNumber++;

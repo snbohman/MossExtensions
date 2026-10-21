@@ -50,47 +50,70 @@ using FragmentShader = ShaderSource<ShaderStage::Fragment>;
 
 enum class BindAccess { Sample, Read, Write, ReadWrite };
 
+// What `resource` names: a SimImage (or "draw") or a SimBuffer
+enum class BindTarget { Image, Buffer };
+
 /*
  * One descriptor slot plus WHAT goes in it. Build it with the verbs below,
- * which set `type` and `access`. `index` equals layout(binding = N) in your
- * shader: nothing is inferred. `resource` is a SimImage name or
- * DRAW_IMAGE_NAME ("draw"); a graphics pass may not bind "draw" (it is the
- * render target).
+ * which set `type`, `access` and `target`. `index` equals layout(binding = N)
+ * in your shader: nothing is inferred. `resource` is a SimImage name,
+ * DRAW_IMAGE_NAME ("draw") or a SimBuffer name; a graphics pass may not bind
+ * "draw" (it is the render target).
  */
 struct Binding {
     u32 index;
     VkDescriptorType type;
     BindAccess access;
     std::string resource;
+    BindTarget target = BindTarget::Image;
 };
 
 /*
- * Resolution (the descriptor layout is always GENERAL):
+ * Resolution (image descriptor layout is always GENERAL). Images and buffers
+ * resolve the same way; "side" only matters when the resource is DoubleBuffered:
  *
- *   verb       descriptor type          single image   double-buffered image
- *   sample     COMBINED_IMAGE_SAMPLER   the image      read side
- *   read       STORAGE_IMAGE            the image      read side
- *   write      STORAGE_IMAGE            the image      write side (the other one),
- *                                                      the sides swap after the iteration
- *   readWrite  STORAGE_IMAGE            the image      error
+ *   verb              descriptor type          single resource   double-buffered
+ *   sample            COMBINED_IMAGE_SAMPLER   the image         read side
+ *   read              STORAGE_IMAGE            the image         read side
+ *   write             STORAGE_IMAGE            the image         write side (the other one),
+ *                                                                the sides swap after the iteration
+ *   readWrite         STORAGE_IMAGE            the image         error
+ *   uniform           UNIFORM_BUFFER           the buffer        read side
+ *   storage           STORAGE_BUFFER           the buffer        read side
+ *   storageWrite      STORAGE_BUFFER           the buffer        write side, sides swap afterwards
+ *   storageReadWrite  STORAGE_BUFFER           the buffer        error
  *
  * The verb only picks the descriptor type and the double-buffer side. What the
- * shader does with the binding is the shader's business.
+ * shader does with the binding is the shader's business. Image verbs take a
+ * SimImage name, buffer verbs a SimBuffer name.
  *
  * Call these qualified (vk::read, vk::write): the unqualified names can clash
  * with POSIX read(2) and write(2) under a using-directive.
  */
 inline Binding sample(u32 index, std::string image) {
-    return Binding{ index, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, BindAccess::Sample, std::move(image) };
+    return Binding{ index, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, BindAccess::Sample, std::move(image), BindTarget::Image };
 }
 inline Binding read(u32 index, std::string image) {
-    return Binding{ index, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, BindAccess::Read, std::move(image) };
+    return Binding{ index, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, BindAccess::Read, std::move(image), BindTarget::Image };
 }
 inline Binding write(u32 index, std::string image) {
-    return Binding{ index, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, BindAccess::Write, std::move(image) };
+    return Binding{ index, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, BindAccess::Write, std::move(image), BindTarget::Image };
 }
 inline Binding readWrite(u32 index, std::string image) {
-    return Binding{ index, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, BindAccess::ReadWrite, std::move(image) };
+    return Binding{ index, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, BindAccess::ReadWrite, std::move(image), BindTarget::Image };
+}
+
+inline Binding uniform(u32 index, std::string buffer) {
+    return Binding{ index, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, BindAccess::Read, std::move(buffer), BindTarget::Buffer };
+}
+inline Binding storage(u32 index, std::string buffer) {
+    return Binding{ index, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, BindAccess::Read, std::move(buffer), BindTarget::Buffer };
+}
+inline Binding storageWrite(u32 index, std::string buffer) {
+    return Binding{ index, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, BindAccess::Write, std::move(buffer), BindTarget::Buffer };
+}
+inline Binding storageReadWrite(u32 index, std::string buffer) {
+    return Binding{ index, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, BindAccess::ReadWrite, std::move(buffer), BindTarget::Buffer };
 }
 
 /*
@@ -123,7 +146,8 @@ struct Bind : public Component {
  *
  * The image form only works if the shader declares the same local_size_x and
  * local_size_y as the defaults (16 x 16) or the values you pass: you keep them
- * in sync. The image is a SimImage name or "draw".
+ * in sync. The image is a SimImage name or "draw". With "draw" the group counts
+ * follow the window when it is resized; the explicit form never changes.
  */
 struct Dispatch : public Component {
     Dispatch(u32 gx, u32 gy = 1, u32 gz = 1)
@@ -180,7 +204,7 @@ struct DrawCall : public Component {
 
 /*
  * Run the pass `count` times back to back (count >= 1). Each iteration that
- * writes a double-buffered image swaps its sides afterwards.
+ * writes a double-buffered resource swaps its sides afterwards.
  */
 struct Repeat : public Component {
     explicit Repeat(u32 c) : count(c) { }
