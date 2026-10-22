@@ -21,7 +21,7 @@ jobs:
       - name: Checkout Windows branch
         uses: actions/checkout@v7
         with:
-          ref: windows
+          ref: win
           fetch-depth: 0
 
       - name: Configure Git
@@ -29,10 +29,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Merge main into windows
+      - name: Merge main into win branch
         run: |
-          git fetch origin main windows
+          git fetch origin main win
           git merge --no-edit origin/main
 
       - name: Push updated Windows branch
-        run: git push origin HEAD:windows
+        run: git push origin HEAD:win
