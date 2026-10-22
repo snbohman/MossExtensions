@@ -9,13 +9,16 @@ namespace moss::extensions::vulkan {
 
 /*
  * One SimImage entity creates one named image (two sides if it also carries
- * DoubleBuffered). Extent is the draw image extent times ImageScale, rounded
- * to nearest, minimum 1. Images are 2D, one mip, one layer, GPU-only, usage
+ * DoubleBuffered). Extent: ImageExtent if present, else the initial draw image
+ * extent times ImageScale (rounded to nearest, minimum 1), else the initial
+ * draw image extent. Images are 2D, one mip, one layer, GPU-only, usage
  * storage + sampled + transfer src + transfer dst. They are zero-cleared once
  * on the first frame and then stay in GENERAL for their whole life, so sim
- * state persists across frames.
+ * state persists across frames. They are fixed resolution: they do NOT follow
+ * the window when it is resized.
  *
- * Name rules: non-empty, unique, and not DRAW_IMAGE_NAME ("draw").
+ * Name rules: non-empty, unique across SimImage AND SimBuffer, and not
+ * DRAW_IMAGE_NAME ("draw").
  */
 struct SimImage : public Component {
     SimImage(std::string n, VkFormat f = VK_FORMAT_R16G16B16A16_SFLOAT)
@@ -25,7 +28,10 @@ struct SimImage : public Component {
     VkFormat format;
 };
 
-// Optional on a SimImage entity. Default 1.0, must be greater than 0.
+/*
+ * Optional on a SimImage entity. Relative to the INITIAL draw extent (the one
+ * at build time). Must be greater than 0. Not combinable with ImageExtent.
+ */
 struct ImageScale : public Component {
     explicit ImageScale(float s) : scale(s) { }
 
@@ -33,9 +39,40 @@ struct ImageScale : public Component {
 };
 
 /*
- * Optional tag on a SimImage entity. The image gets two sides. Reading gives
- * the current side, writing gives the other one, and the sides swap after each
- * pass iteration that writes the image.
+ * Optional on a SimImage entity. Explicit size in pixels, both at least 1 and
+ * at most the device's maxImageDimension2D. Not combinable with ImageScale.
+ * Graphics passes render into the window-sized draw image, so a fixed image can
+ * have a different aspect ratio: handling that is the shader's job.
+ */
+struct ImageExtent : public Component {
+    ImageExtent(u32 w, u32 h) : width(w), height(h) { }
+
+    u32 width;
+    u32 height;
+};
+
+/*
+ * One SimBuffer entity creates one named buffer of `size` bytes (two sides if
+ * it also carries DoubleBuffered). GPU-only, usage uniform + storage + transfer
+ * src + transfer dst. It is zero-filled once on the first frame (vkCmdFillBuffer)
+ * and then keeps its content across frames. There is no initial data upload yet:
+ * seed it with a Once pass.
+ *
+ * Size rules: greater than 0 and a multiple of 4. A buffer bound as a uniform
+ * buffer must also fit maxUniformBufferRange, one bound as a storage buffer
+ * maxStorageBufferRange (checked per binding). Name rules as for SimImage.
+ */
+struct SimBuffer : public Component {
+    SimBuffer(std::string n, u64 bytes) : name(std::move(n)), size(bytes) { }
+
+    std::string name;
+    u64 size;
+};
+
+/*
+ * Optional tag on a SimImage or SimBuffer entity. The resource gets two sides.
+ * Reading gives the current side, writing gives the other one, and the sides
+ * swap after each pass iteration that writes the resource.
  */
 struct DoubleBuffered : public Component { };
 

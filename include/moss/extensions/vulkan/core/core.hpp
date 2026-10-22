@@ -41,4 +41,14 @@ private:
     void initSyncStructures(RenderCore& core);
 };
 
+/*
+ * Rebuilds everything with swapchain lifetime for a new framebuffer size: waits
+ * for the device to go idle, flushes core.swapchainDqueue, builds the new
+ * swapchain with the old one as oldSwapchain, creates the draw image and the
+ * render semaphores again, destroys the old swapchain and bumps
+ * core.swapchainGeneration. Called by FrameBegin only, before it begins the
+ * command buffer. The draw image content is lost.
+ */
+void recreateSwapchain(RenderCore& core, VkExtent2D desired);
+
 }

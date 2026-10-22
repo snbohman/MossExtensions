@@ -1,0 +1,38 @@
+name: Sync Windows Branch
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-windows-branch
+  cancel-in-progress: false
+
+jobs:
+  merge-main:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Windows branch
+        uses: actions/checkout@v7
+        with:
+          ref: win
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge main into win branch
+        run: |
+          git fetch origin main win
+          git merge --no-edit origin/main
+
+      - name: Push updated Windows branch
+        run: git push origin HEAD:win
