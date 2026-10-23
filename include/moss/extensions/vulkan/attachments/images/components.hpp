@@ -20,7 +20,7 @@ namespace moss::extensions::vulkan {
  * Name rules: non-empty, unique across SimImage AND SimBuffer, and not
  * DRAW_IMAGE_NAME ("draw").
  */
-struct SimImage : public Component {
+struct SimImage {
     std::string name;
     VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT;
 };
@@ -30,7 +30,7 @@ struct SimImage : public Component {
  * at build time). Must be greater than 0. Not combinable with ImageExtent.
  */
 
-struct ImageScale : public Component {
+struct ImageScale {
     float scale = 1.0f;
 };
 
@@ -40,7 +40,7 @@ struct ImageScale : public Component {
  * Graphics passes render into the window-sized draw image, so a fixed image can
  * have a different aspect ratio: handling that is the shader's job.
  */
-struct ImageExtent : public Component {
+struct ImageExtent {
     u32 width = 0;
     u32 height = 0;
 };
@@ -56,7 +56,7 @@ struct ImageExtent : public Component {
  * buffer must also fit maxUniformBufferRange, one bound as a storage buffer
  * maxStorageBufferRange (checked per binding). Name rules as for SimImage.
  */
-struct SimBuffer : public Component {
+struct SimBuffer {
     std::string name;
     u64 size = 0;
 };
@@ -66,13 +66,13 @@ struct SimBuffer : public Component {
  * Reading gives the current side, writing gives the other one, and the sides
  * swap after each pass iteration that writes the resource.
  */
-struct DoubleBuffered : public Component { };
+struct DoubleBuffered { char tag = 0; };
 
 /*
  * Optional, on at most one entity in the Context. Settings of the one shared
  * sampler that serves every sample binding.
  */
-struct SamplerSettings : public Component {
+struct SamplerSettings {
     VkFilter filter = VK_FILTER_LINEAR;
     VkSamplerAddressMode address = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 };

@@ -36,7 +36,7 @@ enum class ShaderStage { Compute, Vertex, Fragment };
 
 // Path to a precompiled SPIR-V file for one stage. The shaders are yours.
 template<ShaderStage S>
-struct ShaderSource : public Component {
+struct ShaderSource {
     std::string path;
 };
 
@@ -121,7 +121,7 @@ inline Binding storageReadWrite(u32 index, std::string buffer) {
  * constraint keeps it from hijacking copy construction: a copy would deduce
  * B = Bind, which is not Binding.
  */
-struct Bind : public Component {
+struct Bind {
     Bind() = default;
 
     template<typename... B>
@@ -149,7 +149,7 @@ struct Bind : public Component {
  * in sync. The image is a SimImage name or "draw". With "draw" the group counts
  * follow the window when it is resized; the explicit form never changes.
  */
-struct Dispatch : public Component {
+struct Dispatch {
     Dispatch(u32 gx, u32 gy = 1, u32 gz = 1)
         : fromImage(false), groupX(gx), groupY(gy), groupZ(gz), localX(16), localY(16) { }
 
@@ -173,7 +173,7 @@ struct Dispatch : public Component {
  * fullscreen triangle: no culling, no blending. The colour format is always
  * the draw image's.
  */
-struct PipelineState : public Component {
+struct PipelineState {
     VkPrimitiveTopology topology    = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     VkCullModeFlags     cullMode    = VK_CULL_MODE_NONE;
     VkFrontFace         frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
@@ -181,7 +181,7 @@ struct PipelineState : public Component {
 };
 
 // Graphics passes, optional. Defaults are the fullscreen triangle.
-struct DrawCall : public Component {
+struct DrawCall {
     u32 vertexCount   = 3;
     u32 instanceCount = 1;
 };
@@ -195,12 +195,12 @@ struct DrawCall : public Component {
  * writes a double-buffered resource swaps its sides afterwards.
  */
 
-struct Repeat : public Component {
+struct Repeat {
     u32 count = 1;
 };
 
 // Run the pass only on the first frame (seeding an image, for example).
-struct Once : public Component { };
+struct Once { char tag = 0; };
 
 /*
  * Push constants, up to 128 bytes (and the device's maxPushConstantsSize).
@@ -212,7 +212,7 @@ struct Once : public Component { };
  *     .attach<vk::PushConstants>(SplatParams{ 0.5f, 0.5f, 0.016f, 0.05f })
  *     pc.as<SplatParams>().x = ...;
  */
-struct PushConstants : public Component {
+struct PushConstants {
     static constexpr u32 MAX_SIZE = 128;
 
     // The !same_as keeps this from hijacking copy construction
@@ -267,7 +267,7 @@ struct PushConstants : public Component {
  * file is not retried until it changes again.
  */
 
-struct HotReload : public Component {
+struct HotReload {
     u32 pollMs = 500;
 };
 

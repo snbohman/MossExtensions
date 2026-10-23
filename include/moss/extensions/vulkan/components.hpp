@@ -44,7 +44,7 @@ namespace moss::extensions::vulkan {
  * Exactly one entity in the Context carries both WindowSettings and
  * RendererSettings (Core warns when there are more and uses the first).
  */
-struct WindowSettings : public Component {
+struct WindowSettings {
     const char* title = "moss";
     u32 width  = 1280;
     u32 height = 720;
@@ -59,7 +59,7 @@ struct WindowSettings : public Component {
  * format is checked: it must support storage image, colour attachment, sampled
  * image with linear filter and blit source, or Core aborts with a message.
  */
-struct RendererSettings : public Component {
+struct RendererSettings {
     bool validationLayers        = true;
     VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
     VkFormat drawFormat          = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -79,7 +79,7 @@ struct RendererSettings : public Component {
  * variadic constructor from hijacking copy construction (attach passes
  * lvalues, so a copy would otherwise match N&& with N = Self&).
  */
-struct RequireInstanceExtension : public Component {
+struct RequireInstanceExtension {
     template<std::convertible_to<std::string>... N>
     requires(sizeof...(N) > 0)
     explicit RequireInstanceExtension(N&&... ns)
@@ -88,7 +88,7 @@ struct RequireInstanceExtension : public Component {
     std::vector<std::string> names;
 };
 
-struct RequireDeviceExtension : public Component {
+struct RequireDeviceExtension {
     template<std::convertible_to<std::string>... N>
     requires(sizeof...(N) > 0)
     explicit RequireDeviceExtension(N&&... ns)
@@ -102,12 +102,12 @@ struct RequireDeviceExtension : public Component {
  * temporary), not a bare braced list: attach cannot forward those.
  * Vulkan 1.1/1.2/1.3 structs get sType forced and pNext cleared.
  */
-struct RequireFeatures10 : public Component {
+struct RequireFeatures10 {
     explicit RequireFeatures10(VkPhysicalDeviceFeatures f) : features(f) { }
     VkPhysicalDeviceFeatures features;
 };
 
-struct RequireFeatures11 : public Component {
+struct RequireFeatures11 {
     explicit RequireFeatures11(VkPhysicalDeviceVulkan11Features f) : features(f) {
         features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
         features.pNext = nullptr;
@@ -115,7 +115,7 @@ struct RequireFeatures11 : public Component {
     VkPhysicalDeviceVulkan11Features features;
 };
 
-struct RequireFeatures12 : public Component {
+struct RequireFeatures12 {
     explicit RequireFeatures12(VkPhysicalDeviceVulkan12Features f) : features(f) {
         features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         features.pNext = nullptr;
@@ -123,7 +123,7 @@ struct RequireFeatures12 : public Component {
     VkPhysicalDeviceVulkan12Features features;
 };
 
-struct RequireFeatures13 : public Component {
+struct RequireFeatures13 {
     explicit RequireFeatures13(VkPhysicalDeviceVulkan13Features f) : features(f) {
         features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         features.pNext = nullptr;
