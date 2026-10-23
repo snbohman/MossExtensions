@@ -2,6 +2,7 @@
 #include "moss/extensions/vulkan/logs.hpp"
 
 #include <fstream>
+#include <string>
 
 namespace moss::extensions::vulkan::utils {
 
@@ -26,46 +27,132 @@ VkPipelineShaderStageCreateInfo shaderStage(
 
 } // namespace info
 
-/* ----------------------------------------------------------- */
-/* ------------------------ Interface ------------------------ */
-/* ----------------------------------------------------------- */
-namespace interface {
+/* ------------------------------------------------------------ */
+/* ------------------------ Internals ------------------------- */
+/* ------------------------------------------------------------ */
+namespace {
 
-BuiltPipeline PipelineBuilder::buildCompute(
-    const std::string& computePath,
-    VkDescriptorSetLayout setLayout,
-    const VkPushConstantRange* push
-) const {
-    VkShaderModule computeModule = createShaderModule(m_device, computePath);
-    VkPipelineLayout layout = createPipelineLayout(m_device, setLayout, push);
+constexpr u32 SPIRV_MAGIC = 0x07230203u;
+constexpr size_t SPIRV_HEADER_WORDS = 5;
+constexpr u32 SPIRV_OP_ENTRY_POINT = 15;
+constexpr u32 SPIRV_OP_FUNCTION_END = 56;
 
+/*
+ * Walks the instruction stream (first word of each instruction: word count in
+ * the high 16 bits, opcode in the low 16). A file cut in the middle of an
+ * instruction fails the walk; a file cut between instructions fails because a
+ * complete module ends with OpFunctionEnd.
+ */
+bool spirvLooksComplete(const std::vector<u32>& code, std::string& why) {
+    size_t at = SPIRV_HEADER_WORDS;
+    u32 lastOp = 0;
+    bool hasEntryPoint = false;
+
+    while (at < code.size()) {
+        const u32 words = code[at] >> 16;
+        const u32 op = code[at] & 0xFFFFu;
+        if (words == 0 || at + words > code.size()) {
+            why = "an instruction runs past the end of the file";
+            return false;
+        }
+
+        if (op == SPIRV_OP_ENTRY_POINT) hasEntryPoint = true;
+        lastOp = op;
+        at += words;
+    }
+
+    if (!hasEntryPoint) {
+        why = "no entry point";
+        return false;
+    }
+    if (lastOp != SPIRV_OP_FUNCTION_END) {
+        why = "the last instruction is not OpFunctionEnd";
+        return false;
+    }
+    return true;
+}
+
+/*
+ * Shared by the aborting and the non-aborting loader. `requireComplete` adds
+ * the structural walk, which only the hot-reload path uses.
+ */
+bool readSpirv(
+    const std::string& path,
+    std::vector<u32>& code,
+    std::string& error,
+    bool requireComplete
+) {
+    std::ifstream file(path, std::ios::ate | std::ios::binary);
+    if (!file.is_open()) {
+        error = "Cannot open SPIR-V file '" + path + "'";
+        return false;
+    }
+
+    const std::streamoff end = file.tellg();
+    const size_t byteSize = end < 0 ? 0 : static_cast<size_t>(end);
+    if (byteSize < SPIRV_HEADER_WORDS * sizeof(u32) || byteSize % sizeof(u32) != 0) {
+        error = "'" + path + "' is not valid SPIR-V (bad size: " + std::to_string(byteSize) + " bytes)";
+        return false;
+    }
+
+    code.resize(byteSize / sizeof(u32));
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(code.data()), static_cast<std::streamsize>(byteSize));
+    if (!file) {
+        error = "Cannot read SPIR-V file '" + path + "'";
+        return false;
+    }
+
+    if (code[0] != SPIRV_MAGIC) {
+        error = "'" + path + "' is not valid SPIR-V (missing magic number 0x07230203)";
+        return false;
+    }
+
+    if (requireComplete) {
+        std::string why;
+        if (!spirvLooksComplete(code, why)) {
+            error = "'" + path + "' is not a complete SPIR-V module (" + why + ")";
+            return false;
+        }
+    }
+    return true;
+}
+
+VkResult createModule(VkDevice device, const std::vector<u32>& code, VkShaderModule* out) {
+    VkShaderModuleCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    info.pNext = nullptr;
+    info.codeSize = code.size() * sizeof(u32);
+    info.pCode = code.data();
+
+    return vkCreateShaderModule(device, &info, nullptr, out);
+}
+
+VkResult createComputePipeline(
+    VkDevice device,
+    VkShaderModule module,
+    VkPipelineLayout layout,
+    VkPipeline* out
+) {
     VkComputePipelineCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     info.pNext = nullptr;
     info.layout = layout;
-    info.stage = info::shaderStage(VK_SHADER_STAGE_COMPUTE_BIT, computeModule);
+    info.stage = info::shaderStage(VK_SHADER_STAGE_COMPUTE_BIT, module);
 
-    VkPipeline pipeline;
-    VK_CHECK(vkCreateComputePipelines(
-        m_device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline
-    ));
-
-    vkDestroyShaderModule(m_device, computeModule, nullptr);
-    return BuiltPipeline{ pipeline, layout };
+    return vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, out);
 }
 
-BuiltPipeline PipelineBuilder::buildGraphics(
-    const std::string& vertexPath,
-    const std::string& fragmentPath,
-    VkDescriptorSetLayout setLayout,
-    const GraphicsState& state,
+// The fixed-function state lives here once, for both the build and the reload path
+VkResult createGraphicsPipeline(
+    VkDevice device,
+    VkShaderModule vertModule,
+    VkShaderModule fragModule,
+    VkPipelineLayout layout,
+    const interface::GraphicsState& state,
     VkFormat colorFormat,
-    const VkPushConstantRange* push
-) const {
-    VkShaderModule vertModule = createShaderModule(m_device, vertexPath);
-    VkShaderModule fragModule = createShaderModule(m_device, fragmentPath);
-    VkPipelineLayout layout = createPipelineLayout(m_device, setLayout, push);
-
+    VkPipeline* out
+) {
     VkPipelineShaderStageCreateInfo stages[2] = {
         info::shaderStage(VK_SHADER_STAGE_VERTEX_BIT, vertModule),
         info::shaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, fragModule)
@@ -148,14 +235,100 @@ BuiltPipeline PipelineBuilder::buildGraphics(
     info.layout = layout;
     info.renderPass = VK_NULL_HANDLE;
 
+    return vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, out);
+}
+
+} // namespace
+
+/* ----------------------------------------------------------- */
+/* ------------------------ Interface ------------------------ */
+/* ----------------------------------------------------------- */
+namespace interface {
+
+BuiltPipeline PipelineBuilder::buildCompute(
+    const std::string& computePath,
+    VkDescriptorSetLayout setLayout,
+    const VkPushConstantRange* push
+) const {
+    VkShaderModule computeModule = createShaderModule(m_device, computePath);
+    VkPipelineLayout layout = createPipelineLayout(m_device, setLayout, push);
+
     VkPipeline pipeline;
-    VK_CHECK(vkCreateGraphicsPipelines(
-        m_device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline
+    VK_CHECK(createComputePipeline(m_device, computeModule, layout, &pipeline));
+
+    vkDestroyShaderModule(m_device, computeModule, nullptr);
+    return BuiltPipeline{ pipeline, layout };
+}
+
+BuiltPipeline PipelineBuilder::buildGraphics(
+    const std::string& vertexPath,
+    const std::string& fragmentPath,
+    VkDescriptorSetLayout setLayout,
+    const GraphicsState& state,
+    VkFormat colorFormat,
+    const VkPushConstantRange* push
+) const {
+    VkShaderModule vertModule = createShaderModule(m_device, vertexPath);
+    VkShaderModule fragModule = createShaderModule(m_device, fragmentPath);
+    VkPipelineLayout layout = createPipelineLayout(m_device, setLayout, push);
+
+    VkPipeline pipeline;
+    VK_CHECK(createGraphicsPipeline(
+        m_device, vertModule, fragModule, layout, state, colorFormat, &pipeline
     ));
 
     vkDestroyShaderModule(m_device, vertModule, nullptr);
     vkDestroyShaderModule(m_device, fragModule, nullptr);
     return BuiltPipeline{ pipeline, layout };
+}
+
+VkPipeline PipelineBuilder::tryBuildCompute(
+    const std::string& computePath,
+    VkPipelineLayout layout
+) const {
+    VkShaderModule module = tryCreateShaderModule(m_device, computePath);
+    if (module == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    const VkResult result = createComputePipeline(m_device, module, layout, &pipeline);
+    vkDestroyShaderModule(m_device, module, nullptr);
+
+    if (result != VK_SUCCESS) {
+        M_ERROR("Compute pipeline creation failed for '{}': {}", computePath, string_VkResult(result));
+        return VK_NULL_HANDLE;
+    }
+    return pipeline;
+}
+
+VkPipeline PipelineBuilder::tryBuildGraphics(
+    const std::string& vertexPath,
+    const std::string& fragmentPath,
+    VkPipelineLayout layout,
+    const GraphicsState& state,
+    VkFormat colorFormat
+) const {
+    VkShaderModule vertModule = tryCreateShaderModule(m_device, vertexPath);
+    if (vertModule == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+
+    VkShaderModule fragModule = tryCreateShaderModule(m_device, fragmentPath);
+    if (fragModule == VK_NULL_HANDLE) {
+        vkDestroyShaderModule(m_device, vertModule, nullptr);
+        return VK_NULL_HANDLE;
+    }
+
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    const VkResult result = createGraphicsPipeline(
+        m_device, vertModule, fragModule, layout, state, colorFormat, &pipeline
+    );
+    vkDestroyShaderModule(m_device, vertModule, nullptr);
+    vkDestroyShaderModule(m_device, fragModule, nullptr);
+
+    if (result != VK_SUCCESS) {
+        M_ERROR("Graphics pipeline creation failed for '{}' + '{}': {}",
+                vertexPath, fragmentPath, string_VkResult(result));
+        return VK_NULL_HANDLE;
+    }
+    return pipeline;
 }
 
 } // namespace interface
@@ -185,26 +358,30 @@ VkDescriptorSetLayout createDescriptorSetLayout(
 }
 
 VkShaderModule createShaderModule(VkDevice device, const std::string& path) {
-    std::ifstream file(path, std::ios::ate | std::ios::binary);
-    if (!file.is_open())
-        M_FATAL("Cannot open SPIR-V file '{}'", path);
-
-    const size_t byteSize = static_cast<size_t>(file.tellg());
-    if (byteSize == 0 || byteSize % sizeof(u32) != 0)
-        M_FATAL("'{}' is not valid SPIR-V (bad size: {} bytes)", path, byteSize);
-
-    std::vector<u32> code(byteSize / sizeof(u32));
-    file.seekg(0);
-    file.read(reinterpret_cast<char*>(code.data()), static_cast<std::streamsize>(byteSize));
-
-    VkShaderModuleCreateInfo info = {};
-    info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    info.pNext = nullptr;
-    info.codeSize = byteSize;
-    info.pCode = code.data();
+    std::vector<u32> code;
+    std::string error;
+    if (!readSpirv(path, code, error, false))
+        M_FATAL("{}", error);
 
     VkShaderModule module;
-    VK_CHECK(vkCreateShaderModule(device, &info, nullptr, &module));
+    VK_CHECK(createModule(device, code, &module));
+    return module;
+}
+
+VkShaderModule tryCreateShaderModule(VkDevice device, const std::string& path) {
+    std::vector<u32> code;
+    std::string error;
+    if (!readSpirv(path, code, error, true)) {
+        M_ERROR("{}", error);
+        return VK_NULL_HANDLE;
+    }
+
+    VkShaderModule module = VK_NULL_HANDLE;
+    const VkResult result = createModule(device, code, &module);
+    if (result != VK_SUCCESS) {
+        M_ERROR("vkCreateShaderModule failed for '{}': {}", path, string_VkResult(result));
+        return VK_NULL_HANDLE;
+    }
     return module;
 }
 
