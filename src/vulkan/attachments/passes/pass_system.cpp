@@ -222,7 +222,12 @@ std::vector<PassSystem::PassConfig> PassSystem::gather(
 
             M_WARN_IF(dispatch.has_value(), "{}: Dispatch is for compute passes and is ignored", config.label);
 
-            if (state) config.state = state->state;
+            if (state) {
+                config.state.topology    = state->topology;
+                config.state.cullMode    = state->cullMode;
+                config.state.frontFace   = state->frontFace;
+                config.state.blendEnable = state->blendEnable;
+            }
             if (draw) {
                 config.vertexCount = draw->vertexCount;
                 config.instanceCount = draw->instanceCount;
