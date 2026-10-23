@@ -37,7 +37,6 @@ enum class ShaderStage { Compute, Vertex, Fragment };
 // Path to a precompiled SPIR-V file for one stage. The shaders are yours.
 template<ShaderStage S>
 struct ShaderSource : public Component {
-    ShaderSource(std::string p) : path(std::move(p)) { }
     std::string path;
 };
 
@@ -175,28 +174,16 @@ struct Dispatch : public Component {
  * the draw image's.
  */
 struct PipelineState : public Component {
-    PipelineState(
-        VkPrimitiveTopology t = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        VkCullModeFlags c = VK_CULL_MODE_NONE,
-        VkFrontFace f = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        bool blend = false
-    ) {
-        state.topology = t;
-        state.cullMode = c;
-        state.frontFace = f;
-        state.blendEnable = blend;
-    }
-
-    utils::interface::GraphicsState state;
+    VkPrimitiveTopology topology    = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkCullModeFlags     cullMode    = VK_CULL_MODE_NONE;
+    VkFrontFace         frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    bool                blendEnable = false;
 };
 
 // Graphics passes, optional. Defaults are the fullscreen triangle.
 struct DrawCall : public Component {
-    DrawCall(u32 vertices = 3, u32 instances = 1)
-        : vertexCount(vertices), instanceCount(instances) { }
-
-    u32 vertexCount;
-    u32 instanceCount;
+    u32 vertexCount   = 3;
+    u32 instanceCount = 1;
 };
 
 /* ------------------------------------------------------------------------ */
@@ -207,9 +194,9 @@ struct DrawCall : public Component {
  * Run the pass `count` times back to back (count >= 1). Each iteration that
  * writes a double-buffered resource swaps its sides afterwards.
  */
+
 struct Repeat : public Component {
-    explicit Repeat(u32 c) : count(c) { }
-    u32 count;
+    u32 count = 1;
 };
 
 // Run the pass only on the first frame (seeding an image, for example).
@@ -279,10 +266,9 @@ struct PushConstants : public Component {
  * that fails to build, logs an error and the old pipeline keeps running. The
  * file is not retried until it changes again.
  */
-struct HotReload : public Component {
-    explicit HotReload(u32 poll = 500) : pollMs(poll) { }
 
-    u32 pollMs;
+struct HotReload : public Component {
+    u32 pollMs = 500;
 };
 
 }

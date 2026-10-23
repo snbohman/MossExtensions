@@ -45,14 +45,11 @@ namespace moss::extensions::vulkan {
  * RendererSettings (Core warns when there are more and uses the first).
  */
 struct WindowSettings : public Component {
-    WindowSettings(const char* t, i32 w, i32 h, i32 fps = 60, bool r = false)
-        : title(t), width(w), height(h), targetFPS(fps), resize(r) { }
-
-    const char* title;
-    u32 width;
-    u32 height;
-    u32 targetFPS;   // reserved, unused: there is no frame limiting yet
-    bool resize;
+    const char* title = "moss";
+    u32 width  = 1280;
+    u32 height = 720;
+    u32 targetFPS = 60;   // reserved, unused
+    bool resize = false;
 };
 
 /*
@@ -63,17 +60,10 @@ struct WindowSettings : public Component {
  * image with linear filter and blit source, or Core aborts with a message.
  */
 struct RendererSettings : public Component {
-    RendererSettings(
-        bool vl = true,
-        VkPresentModeKHR pm = VK_PRESENT_MODE_FIFO_KHR,
-        VkFormat draw = VK_FORMAT_R16G16B16A16_SFLOAT,
-        VkFormat swapchain = VK_FORMAT_B8G8R8A8_UNORM
-    ) : validationLayers(vl), presentMode(pm), drawFormat(draw), swapchainFormat(swapchain) { }
-
-    bool validationLayers;
-    VkPresentModeKHR presentMode;
-    VkFormat drawFormat;
-    VkFormat swapchainFormat;
+    bool validationLayers        = true;
+    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    VkFormat drawFormat          = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat swapchainFormat     = VK_FORMAT_B8G8R8A8_UNORM;
 };
 
 /* ------------------------------------------------------------------------ */
