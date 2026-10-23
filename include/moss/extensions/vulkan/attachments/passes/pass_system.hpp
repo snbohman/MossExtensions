@@ -7,6 +7,9 @@
 #include "moss/extensions/vulkan/attachments/images/gpu_resources.hpp"
 #include "moss/extensions/vulkan/attachments/passes/components.hpp"
 
+#include <chrono>
+#include <filesystem>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -40,6 +43,13 @@ namespace moss::extensions::vulkan {
  * compares core.swapchainGeneration with its own copy; when it differs it
  * recomputes the group counts of Dispatch("draw") passes and rewrites every
  * descriptor set that binds "draw".
+ *
+ * Hot reload (opt-in, see HotReload in components.hpp): when one entity of the
+ * Context carries HotReload, the system polls the passes' SPIR-V files at the
+ * start of tick, before recording, and rebuilds the pipelines of the passes
+ * whose files changed. It replaces the pipeline only: the layout, sets, push
+ * range and bindings stay, so a shader whose interface changed needs a
+ * restart. A failed reload logs and keeps the old pipeline.
  */
 class PassSystem : public moss::System {
 public:
@@ -48,6 +58,24 @@ public:
 
 private:
     enum class Kind { Compute, Graphics };
+
+    /*
+     * The pipeline lives behind a pointer so a hot reload can swap it. The
+     * build-time deletor captures this pointer (never `this`) and destroys
+     * whatever handle is current when core.dqueue is flushed, so a reload
+     * can never cause a double destroy at exit.
+     */
+    struct PipelineHolder {
+        VkPipeline handle = VK_NULL_HANDLE;
+    };
+
+    /* One SPIR-V file, shared by however many passes use it, stat'd once per poll */
+    struct WatchedFile {
+        std::string path;
+        std::filesystem::file_time_type observed = {};   // mtime at the last poll
+        std::filesystem::file_time_type accepted = {};   // mtime of the last settled version
+        u32 version = 0;                                 // bumped when a new version settles
+    };
 
     /* Plain copies of ECS data, so the queries are separate from Vulkan init */
     struct PassConfig {
@@ -83,8 +111,8 @@ private:
         DynamicView entityView;              // one element, for the per-tick PushConstants lookup
         std::string label;
 
-        VkPipeline pipeline = VK_NULL_HANDLE;
-        VkPipelineLayout layout = VK_NULL_HANDLE;
+        std::shared_ptr<PipelineHolder> pipeline;           // swapped by a hot reload
+        VkPipelineLayout layout = VK_NULL_HANDLE;           // never changes
         VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;   // null: the pass has no bindings
         std::vector<VkDescriptorSet> sets;                  // 2^k sets, indexed by mask
 
@@ -104,6 +132,14 @@ private:
         bool usesDraw = false;               // some image binding is "draw"
         bool dispatchOnDraw = false;         // Dispatch("draw", ...): groups follow the window
         u32 localX = 16, localY = 16;
+
+        // Kept for hot reload: what a rebuild of the pipeline needs
+        std::string computePath;
+        std::string vertexPath;
+        std::string fragmentPath;
+        utils::interface::GraphicsState state;
+        std::vector<u32> watched;            // indices into m_watched (empty: hot reload off)
+        std::vector<u32> builtVersions;      // version of each watched file the pipeline came from
 
         // D: distinct double-buffered resources (images or buffers) the pass
         // binds. Bit j of a mask is the current read side of D[j]; the pass has
@@ -132,8 +168,16 @@ private:
     // Re-derives everything that depends on the draw image after a resize
     void refresh(const RenderCore& core, const GpuResources* gpu);
 
+    // Hot reload: poll the files, rebuild the pipelines of the passes that changed
+    void pollShaders(const RenderCore& core);
+
     std::vector<CompiledPass> m_passes = {};   // creation order
     u32 m_generation = 0;                      // RenderCore::swapchainGeneration last seen
+
+    bool m_hotReload = false;                  // a HotReload component was found
+    std::chrono::milliseconds m_pollInterval{ 500 };
+    std::chrono::steady_clock::time_point m_lastPoll = {};
+    std::vector<WatchedFile> m_watched = {};   // one entry per distinct SPIR-V path
 };
 
 }

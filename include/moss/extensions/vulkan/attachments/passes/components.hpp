@@ -23,6 +23,7 @@
  *
  * Optional on any pass: Bind, Repeat, Once, PushConstants.
  * Graphics only: PipelineState, DrawCall. Compute only: Dispatch.
+ * Optional on any ONE entity of the Context (not a pass): HotReload.
  */
 
 namespace moss::extensions::vulkan {
@@ -247,6 +248,41 @@ struct PushConstants : public Component {
 
     u32 size = 0;
     alignas(16) std::byte data[MAX_SIZE] = {};
+};
+
+/* ------------------------------------------------------------------------ */
+/* ------------------------------- Hot reload ----------------------------- */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * Opt-in shader hot reload. Put it on any ONE entity of the Context (PassSystem
+ * warns and uses the first if several carry it). Absent means off: nothing is
+ * polled and nothing is stat'd.
+ *
+ *     .attach<vk::HotReload>()        // poll every 500 ms
+ *     .attach<vk::HotReload>(250u)    // poll every 250 ms (0 = every frame)
+ *
+ * What it does: at most every `pollMs`, PassSystem checks the modification time
+ * of the SPIR-V file of every pass (a file shared by several passes is checked
+ * once). A change is only acted on once the time was the same on two polls in
+ * a row, so a tool that is still writing the file is waited for: expect the new
+ * shader 1-2 poll intervals after the file is written. Then the pass's pipeline
+ * is rebuilt from the files and swapped in at the start of the next recording.
+ *
+ * What it does NOT do: it replaces the PIPELINE only. The descriptor set
+ * layout, the sets, the push-constant range and the bindings come from the
+ * components, not from the shader, and nothing is reflected. A shader whose
+ * interface changed (other bindings, other push block) needs a restart; the
+ * validation layers will say so if you forget.
+ *
+ * Failure never aborts: a missing, truncated or invalid file, or a pipeline
+ * that fails to build, logs an error and the old pipeline keeps running. The
+ * file is not retried until it changes again.
+ */
+struct HotReload : public Component {
+    explicit HotReload(u32 poll = 500) : pollMs(poll) { }
+
+    u32 pollMs;
 };
 
 }

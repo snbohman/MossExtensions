@@ -57,6 +57,14 @@ struct GraphicsState {
  * setLayout == VK_NULL_HANDLE means "no bindings": the pipeline layout then
  * has zero set layouts. When `push` is non-null it adds one push-constant
  * range to the layout.
+ *
+ * build*: log, then abort on any failure (the extension's error policy).
+ *
+ * tryBuild*: the ONE exception to that policy, for shader hot reload. They
+ * build only the pipeline, against a layout that already exists (the layout
+ * never changes on a reload), and on any failure log with M_ERROR and return
+ * VK_NULL_HANDLE. The caller owns a non-null result. They also reject SPIR-V
+ * that is visibly incomplete (see tryCreateShaderModule).
  */
 class PipelineBuilder {
 public:
@@ -77,6 +85,19 @@ public:
         const VkPushConstantRange* push = nullptr
     ) const;
 
+    VkPipeline tryBuildCompute(
+        const std::string& computePath,
+        VkPipelineLayout layout
+    ) const;
+
+    VkPipeline tryBuildGraphics(
+        const std::string& vertexPath,
+        const std::string& fragmentPath,
+        VkPipelineLayout layout,
+        const GraphicsState& state,
+        VkFormat colorFormat
+    ) const;
+
 private:
     VkDevice m_device;
 };
@@ -94,8 +115,19 @@ VkDescriptorSetLayout createDescriptorSetLayout(
     VkShaderStageFlags shaderStages
 );
 
-// Logs the path and aborts when the file is missing or not valid SPIR-V.
+// Logs the path and aborts when the file is missing or not valid SPIR-V
+// (size, magic number).
 VkShaderModule createShaderModule(VkDevice device, const std::string& path);
+
+/*
+ * Non-aborting twin of createShaderModule, for hot reload only. Logs and
+ * returns VK_NULL_HANDLE when the file cannot be read, is too small, has a
+ * size that is not a multiple of 4, lacks the SPIR-V magic number, or is
+ * visibly incomplete: the instruction stream must end exactly at the end of
+ * the file, contain an OpEntryPoint and end with OpFunctionEnd. This is a
+ * cheap truncation check, not a validator.
+ */
+VkShaderModule tryCreateShaderModule(VkDevice device, const std::string& path);
 
 VkPipelineLayout createPipelineLayout(
     VkDevice device,

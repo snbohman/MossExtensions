@@ -7,8 +7,12 @@
 #include "moss/extensions/vulkan/logs.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -275,6 +279,12 @@ PassSystem::CompiledPass PassSystem::analyse(
     pass.instanceCount = config.instanceCount;
     pass.bindings = config.bindings;
 
+    // What a hot reload needs to rebuild the pipeline later
+    pass.computePath = config.computePath;
+    pass.vertexPath = config.vertexPath;
+    pass.fragmentPath = config.fragmentPath;
+    pass.state = config.state;
+
     if (config.repeat == 0)
         M_FATAL("{}: Repeat(0) is invalid, the count must be at least 1", label);
     if (config.hasPush && config.pushSize > limits.maxPushConstantsSize)
@@ -466,6 +476,23 @@ void PassSystem::build(const Key<key::WRITE>& key, const DynamicView& entities) 
     GpuResources* gpu = cmd::Resource<GpuResources>::init(key).find();   // null only if ImageSystem is not connected
     VkDevice device = core.foundation.device;
 
+    // Opt-in hot reload: HotReload on any one entity of the Context
+    auto hotRows = cmd::DynamicQuery<With<
+        HotReload
+    >, cmd::View<
+        Include<HotReload>
+    >>::init(key).atlas(entities);
+    M_WARN_IF(hotRows.size() > 1,
+        "{} entities carry HotReload; PassSystem uses the first and ignores the rest",
+        hotRows.size()
+    );
+    m_hotReload = !hotRows.empty();
+    m_watched.clear();
+    if (m_hotReload) {
+        auto [hot] = hotRows[0];
+        m_pollInterval = std::chrono::milliseconds(hot.pollMs);
+    }
+
     // Copy everything we need out of the ECS before touching Vulkan
     std::vector<PassConfig> configs = gather(key, entities);
 
@@ -527,6 +554,27 @@ void PassSystem::build(const Key<key::WRITE>& key, const DynamicView& entities) 
     /* ------------------- Layouts, sets and pipelines --------------------- */
     utils::interface::PipelineBuilder builder(device);
 
+    // Hot reload bookkeeping: one WatchedFile per distinct path, so a file
+    // shared by several passes is stat'd once per poll
+    std::unordered_map<std::string, u32> watchIndex;
+    auto watchPath = [&](const std::string& path) -> u32 {
+        auto found = watchIndex.find(path);
+        if (found != watchIndex.end()) return found->second;
+
+        // On error this is file_time_type::min(): the first poll then sees a
+        // change and reloads an unchanged file once, which is harmless
+        std::error_code ec;
+        WatchedFile file;
+        file.path = path;
+        file.observed = std::filesystem::last_write_time(path, ec);
+        file.accepted = file.observed;
+
+        const u32 index = u32(m_watched.size());
+        m_watched.push_back(std::move(file));
+        watchIndex.emplace(path, index);
+        return index;
+    };
+
     for (size_t i = 0; i < configs.size(); i++) {
         const PassConfig& config = configs[i];
         CompiledPass& pass = m_passes[i];
@@ -570,6 +618,16 @@ void PassSystem::build(const Key<key::WRITE>& key, const DynamicView& entities) 
         VkPushConstantRange pushRange = { pass.pushStages, 0, pass.pushSize };
         const VkPushConstantRange* push = pass.hasPush ? &pushRange : nullptr;
 
+        // Stat the files BEFORE reading them: a write that lands in between is
+        // then seen as a change by the first poll instead of being missed
+        if (m_hotReload) {
+            if (graphics)
+                pass.watched = { watchPath(config.vertexPath), watchPath(config.fragmentPath) };
+            else
+                pass.watched = { watchPath(config.computePath) };
+            pass.builtVersions.assign(pass.watched.size(), 0u);
+        }
+
         utils::interface::BuiltPipeline built;
         if (!graphics) {
             built = builder.buildCompute(config.computePath, pass.setLayout, push);
@@ -581,15 +639,24 @@ void PassSystem::build(const Key<key::WRITE>& key, const DynamicView& entities) 
             );
         }
 
-        pass.pipeline = built.pipeline;
+        pass.pipeline = std::make_shared<PipelineHolder>();
+        pass.pipeline->handle = built.pipeline;
         pass.layout = built.layout;
 
-        core.dqueue.push([device, built]() {
-            vkDestroyPipeline(device, built.pipeline, nullptr);
-            vkDestroyPipelineLayout(device, built.layout, nullptr);
+        // The layout never changes, so its deletor captures it by value. The
+        // pipeline can be swapped by a hot reload, so its deletor captures the
+        // holder (never `this`) and destroys whatever is current at flush time.
+        // Pushed second, so the pipeline dies before its layout (LIFO).
+        core.dqueue.push([device, layout = built.layout]() {
+            vkDestroyPipelineLayout(device, layout, nullptr);
+        });
+        core.dqueue.push([device, holder = pass.pipeline]() {
+            if (holder->handle != VK_NULL_HANDLE) vkDestroyPipeline(device, holder->handle, nullptr);
+            holder->handle = VK_NULL_HANDLE;
         });
     }
 
+    m_lastPoll = std::chrono::steady_clock::now();
     m_generation = core.swapchainGeneration;
 }
 
@@ -620,6 +687,83 @@ void PassSystem::refresh(const RenderCore& core, const GpuResources* gpu) {
 }
 
 /* -------------------------------------------------------------------- */
+/* ---------------------------- Hot reload ----------------------------- */
+/* -------------------------------------------------------------------- */
+
+/*
+ * Called at the start of tick, before anything is recorded, and only when a
+ * HotReload component exists.
+ *
+ * 1. At most every pollInterval, stat each distinct file once. A new mtime is
+ *    only ACCEPTED (version bumped) when it is the same on two polls in a
+ *    row: a tool may still be writing the file.
+ * 2. A pass is stale when a file of it has a version it was not built from.
+ *    It waits while any of its files is still settling, so a vertex shader
+ *    that is ready is not paired with a half-written fragment shader.
+ * 3. If anything is stale: wait for the device (the other frame slot may
+ *    still be executing the old pipelines), build the new pipelines against
+ *    the existing layouts, and only when one succeeds swap it in and destroy
+ *    the old one. A failure logs and keeps the old pipeline.
+ */
+void PassSystem::pollShaders(const RenderCore& core) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - m_lastPoll < m_pollInterval) return;
+    m_lastPoll = now;
+
+    for (WatchedFile& file : m_watched) {
+        std::error_code ec;
+        const auto mtime = std::filesystem::last_write_time(file.path, ec);
+        if (ec) continue;   // gone for a moment (a tool replacing it): look again next poll
+
+        if (mtime != file.observed) {
+            file.observed = mtime;
+        } else if (file.observed != file.accepted) {
+            file.accepted = file.observed;
+            file.version++;
+        }
+    }
+
+    std::vector<CompiledPass*> stale;
+    for (CompiledPass& pass : m_passes) {
+        bool changed = false;
+        bool settling = false;
+        for (size_t k = 0; k < pass.watched.size(); k++) {
+            const WatchedFile& file = m_watched[pass.watched[k]];
+            if (file.version != pass.builtVersions[k]) changed = true;
+            if (file.observed != file.accepted) settling = true;
+        }
+        if (changed && !settling) stale.push_back(&pass);
+    }
+    if (stale.empty()) return;
+
+    VkDevice device = core.foundation.device;
+    VK_CHECK(vkDeviceWaitIdle(device));
+
+    utils::interface::PipelineBuilder builder(device);
+    for (CompiledPass* pass : stale) {
+        // Consume the versions first: a broken file is reported once and not
+        // retried until it changes again
+        for (size_t k = 0; k < pass->watched.size(); k++)
+            pass->builtVersions[k] = m_watched[pass->watched[k]].version;
+
+        VkPipeline fresh = pass->kind == Kind::Graphics
+            ? builder.tryBuildGraphics(
+                pass->vertexPath, pass->fragmentPath, pass->layout,
+                pass->state, core.drawImage.imageFormat)
+            : builder.tryBuildCompute(pass->computePath, pass->layout);
+
+        if (fresh == VK_NULL_HANDLE) {
+            M_ERROR("{}: shader reload failed, keeping the previous pipeline", pass->label);
+            continue;
+        }
+
+        vkDestroyPipeline(device, pass->pipeline->handle, nullptr);
+        pass->pipeline->handle = fresh;
+        M_INFO("{}: shaders reloaded", pass->label);
+    }
+}
+
+/* -------------------------------------------------------------------- */
 /* ------------------------------- Record ------------------------------ */
 /* -------------------------------------------------------------------- */
 
@@ -646,6 +790,9 @@ void PassSystem::tick(const Key<key::READ>& key) {
         m_generation = core.swapchainGeneration;
     }
 
+    // Opt-in: swap in rebuilt pipelines before anything is recorded this frame
+    if (m_hotReload) pollShaders(core);
+
     // Attachment contract: first call. Also covers the previous frame's passes
     // (sim state is read again this frame) and ImageSystem's first-frame clear.
     utils::syncAll(cmdBuf);
@@ -661,6 +808,7 @@ void PassSystem::tick(const Key<key::READ>& key) {
         const VkPipelineBindPoint bindPoint = graphics
             ? VK_PIPELINE_BIND_POINT_GRAPHICS
             : VK_PIPELINE_BIND_POINT_COMPUTE;
+        const VkPipeline pipeline = pass.pipeline->handle;
 
         // Fetched every tick: a user system may have edited it since last frame
         PushConstants* pushConstants = nullptr;
@@ -708,7 +856,7 @@ void PassSystem::tick(const Key<key::READ>& key) {
             pendingWrites |= pass.writeAccess;
 
             if (!graphics) {
-                vkCmdBindPipeline(cmdBuf, bindPoint, pass.pipeline);
+                vkCmdBindPipeline(cmdBuf, bindPoint, pipeline);
                 if (pass.setLayout != VK_NULL_HANDLE) {
                     vkCmdBindDescriptorSets(
                         cmdBuf, bindPoint, pass.layout, 0, 1, &pass.sets[mask], 0, nullptr
@@ -725,7 +873,7 @@ void PassSystem::tick(const Key<key::READ>& key) {
                     cmdBuf, core.drawImage.imageView, VK_IMAGE_LAYOUT_GENERAL, core.drawImage.drawExtent
                 );
                 utils::setViewportScissor(cmdBuf, core.drawImage.drawExtent);
-                vkCmdBindPipeline(cmdBuf, bindPoint, pass.pipeline);
+                vkCmdBindPipeline(cmdBuf, bindPoint, pipeline);
                 if (pass.setLayout != VK_NULL_HANDLE) {
                     vkCmdBindDescriptorSets(
                         cmdBuf, bindPoint, pass.layout, 0, 1, &pass.sets[mask], 0, nullptr
