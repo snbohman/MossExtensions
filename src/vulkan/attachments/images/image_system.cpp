@@ -34,18 +34,6 @@ struct BufferConfig {
     bool doubleBuffered = false;
 };
 
-/*
- * Optional components have no direct support in moss: run a DynamicQuery over
- * a one-element DynamicView and check for empty. Returns a copy.
- */
-template<typename T, typename K>
-std::optional<T> findOn(const K& key, Entity entity) {
-    DynamicView one{ entity };
-    auto rows = cmd::DynamicQuery<With<T>, cmd::View<Include<T>>>::init(key).atlas(one);
-    if (rows.empty()) return std::nullopt;
-    return std::optional<T>(std::get<0>(rows[0]));
-}
-
 std::string missingFormatFeatures(VkFormatFeatureFlags have, VkFormatFeatureFlags need) {
     struct Named { VkFormatFeatureFlags bit; const char* name; };
     static constexpr Named table[] = {
@@ -72,14 +60,20 @@ void ImageSystem::build(const Key<key::WRITE>& key, const DynamicView& entities)
     VmaAllocator allocator = core.allocator;
 
     /* ---------------------------- Gather ---------------------------- */
+    // copy() is the "optional component" read: a value, or nullopt
+    auto images  = cmd::Query<With<SimImage>>::init(key);
+    auto buffers = cmd::Query<With<SimBuffer>>::init(key);
+    auto scales  = cmd::Query<With<ImageScale>>::init(key);
+    auto extents = cmd::Query<With<ImageExtent>>::init(key);
+
     std::vector<ImageConfig> imageConfigs;
     std::vector<BufferConfig> bufferConfigs;
     for (Entity entity : entities) {
-        auto image  = findOn<SimImage>(key, entity);
-        auto buffer = findOn<SimBuffer>(key, entity);
-        auto scale  = findOn<ImageScale>(key, entity);
-        auto extent = findOn<ImageExtent>(key, entity);
-        const bool doubleBuffered = findOn<DoubleBuffered>(key, entity).has_value();
+        auto image  = images.copy(entity);
+        auto buffer = buffers.copy(entity);
+        auto scale  = scales.copy(entity);
+        auto extent = extents.copy(entity);
+        const bool doubleBuffered = images.has<DoubleBuffered>(entity);
 
         if (image && buffer)
             M_FATAL("An entity carries both SimImage '{}' and SimBuffer '{}'; use one entity per resource",
@@ -111,11 +105,7 @@ void ImageSystem::build(const Key<key::WRITE>& key, const DynamicView& entities)
 
     VkFilter filter = VK_FILTER_LINEAR;
     VkSamplerAddressMode address = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    auto samplerRows = cmd::DynamicQuery<With<
-        SamplerSettings
-    >, cmd::View<
-        Include<SamplerSettings>
-    >>::init(key).atlas(entities);
+    auto samplerRows = cmd::Query<With<SamplerSettings>>::init(key).atlas(entities);
     M_WARN_IF(samplerRows.size() > 1,
         "{} entities carry SamplerSettings; ImageSystem uses the first and ignores the rest",
         samplerRows.size()

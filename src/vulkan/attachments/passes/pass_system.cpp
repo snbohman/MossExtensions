@@ -11,7 +11,6 @@
 #include <filesystem>
 #include <map>
 #include <memory>
-#include <optional>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
@@ -21,18 +20,6 @@ namespace moss::extensions::vulkan {
 namespace {
 
 constexpr u32 MAX_DOUBLE_BUFFERED_PER_PASS = 4;
-
-/*
- * Optional components have no direct support in moss: run a DynamicQuery over
- * a one-element DynamicView and check for empty. Returns a copy.
- */
-template<typename T, typename K>
-std::optional<T> findOn(const K& key, Entity entity) {
-    DynamicView one{ entity };
-    auto rows = cmd::DynamicQuery<With<T>, cmd::View<Include<T>>>::init(key).atlas(one);
-    if (rows.empty()) return std::nullopt;
-    return std::optional<T>(std::get<0>(rows[0]));
-}
 
 u32 groupCount(u32 extent, u32 local) {
     return (extent + local - 1) / local;
@@ -166,12 +153,24 @@ std::vector<PassSystem::PassConfig> PassSystem::gather(
     const Key<key::WRITE>& key,
     const DynamicView& entities
 ) {
+    // Handles are cheap; one per component type. copy() is the "optional
+    // component" read (a value or nullopt), has<T>() tests a tag.
+    auto computes   = cmd::Query<With<ComputeShader>>::init(key);
+    auto vertices   = cmd::Query<With<VertexShader>>::init(key);
+    auto fragments  = cmd::Query<With<FragmentShader>>::init(key);
+    auto dispatches = cmd::Query<With<Dispatch>>::init(key);
+    auto binds      = cmd::Query<With<Bind>>::init(key);
+    auto repeats    = cmd::Query<With<Repeat>>::init(key);
+    auto pushes     = cmd::Query<With<PushConstants>>::init(key);
+    auto states     = cmd::Query<With<PipelineState>>::init(key);
+    auto draws      = cmd::Query<With<DrawCall>>::init(key);
+
     std::vector<PassConfig> passes;
 
     for (Entity entity : entities) {
-        auto compute  = findOn<ComputeShader>(key, entity);
-        auto vertex   = findOn<VertexShader>(key, entity);
-        auto fragment = findOn<FragmentShader>(key, entity);
+        auto compute  = computes.copy(entity);
+        auto vertex   = vertices.copy(entity);
+        auto fragment = fragments.copy(entity);
 
         // No shader component at all: not a pass
         if (!compute && !vertex && !fragment) continue;
@@ -185,13 +184,13 @@ std::vector<PassSystem::PassConfig> PassSystem::gather(
             M_FATAL("pass #{} ({}): a graphics pass needs both a VertexShader and a FragmentShader",
                     index, vertex ? vertex->path : fragment->path);
 
-        auto dispatch = findOn<Dispatch>(key, entity);
-        auto bind     = findOn<Bind>(key, entity);
-        auto repeat   = findOn<Repeat>(key, entity);
-        auto once     = findOn<Once>(key, entity);
-        auto push     = findOn<PushConstants>(key, entity);
-        auto state    = findOn<PipelineState>(key, entity);
-        auto draw     = findOn<DrawCall>(key, entity);
+        auto dispatch = dispatches.copy(entity);
+        auto bind     = binds.copy(entity);
+        auto repeat   = repeats.copy(entity);
+        auto push     = pushes.copy(entity);
+        auto state    = states.copy(entity);
+        auto draw     = draws.copy(entity);
+        const bool once = computes.has<Once>(entity);
 
         PassConfig config;
         config.index = index;
@@ -236,7 +235,7 @@ std::vector<PassSystem::PassConfig> PassSystem::gather(
 
         if (bind) config.bindings = bind->bindings;
         if (repeat) config.repeat = repeat->count;
-        config.once = once.has_value();
+        config.once = once;
         if (push) {
             config.hasPush = true;
             config.pushSize = push->size;
@@ -271,7 +270,6 @@ PassSystem::CompiledPass PassSystem::analyse(
     CompiledPass pass;
     pass.kind = config.kind;
     pass.entity = config.entity;
-    pass.entityView = { config.entity };
     pass.label = label;
     pass.repeat = config.repeat;
     pass.once = config.once;
@@ -482,11 +480,7 @@ void PassSystem::build(const Key<key::WRITE>& key, const DynamicView& entities) 
     VkDevice device = core.foundation.device;
 
     // Opt-in hot reload: HotReload on any one entity of the Context
-    auto hotRows = cmd::DynamicQuery<With<
-        HotReload
-    >, cmd::View<
-        Include<HotReload>
-    >>::init(key).atlas(entities);
+    auto hotRows = cmd::Query<With<HotReload>>::init(key).atlas(entities);
     M_WARN_IF(hotRows.size() > 1,
         "{} entities carry HotReload; PassSystem uses the first and ignores the rest",
         hotRows.size()
@@ -802,6 +796,8 @@ void PassSystem::tick(const Key<key::READ>& key) {
     // (sim state is read again this frame) and ImageSystem's first-frame clear.
     utils::syncAll(cmdBuf);
 
+    auto pushQuery = cmd::Query<With<PushConstants>>::init(key);
+
     std::unordered_set<u32> pending;
     VkPipelineStageFlags2 pendingStages = 0;
     VkAccessFlags2 pendingWrites = 0;
@@ -818,15 +814,10 @@ void PassSystem::tick(const Key<key::READ>& key) {
         // Fetched every tick: a user system may have edited it since last frame
         PushConstants* pushConstants = nullptr;
         if (pass.hasPush) {
-            auto rows = cmd::DynamicQuery<With<
-                PushConstants
-            >, cmd::View<
-                Include<PushConstants>
-            >>::init(key).atlas(pass.entityView);
-            if (rows.empty())
-                M_FATAL("{}: the PushConstants component is gone", pass.label);
+            auto row = pushQuery.find(pass.entity);
+            M_FATAL_IF(!row.has_value(), "{}: the PushConstants component is gone", pass.label);
 
-            pushConstants = &std::get<0>(rows[0]);
+            pushConstants = &std::get<0>(*row);   // points into the registry, not into `row`
             if (pushConstants->size != pass.pushSize)
                 M_FATAL("{}: PushConstants changed size after build ({} -> {})",
                         pass.label, pass.pushSize, pushConstants->size);

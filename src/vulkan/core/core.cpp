@@ -354,65 +354,29 @@ Core::Requirements Core::collectRequirements(
     req.features12.bufferDeviceAddress = VK_TRUE;
     req.features12.descriptorIndexing = VK_TRUE;
 
-    auto instanceRows = cmd::DynamicQuery<With<
-        RequireInstanceExtension
-    >, cmd::View<
-        Include<RequireInstanceExtension>
-    >>::init(key).atlas(entities);
-    for (size_t i = 0; i < instanceRows.size(); i++) {
-        auto [ext] = instanceRows[i];
+    auto instanceRows = cmd::Query<With<RequireInstanceExtension>>::init(key).atlas(entities);
+    for (auto& [ext] : instanceRows)
         addUnique(req.instanceExtensions, ext.names);
-    }
 
-    auto deviceRows = cmd::DynamicQuery<With<
-        RequireDeviceExtension
-    >, cmd::View<
-        Include<RequireDeviceExtension>
-    >>::init(key).atlas(entities);
-    for (size_t i = 0; i < deviceRows.size(); i++) {
-        auto [ext] = deviceRows[i];
+    auto deviceRows = cmd::Query<With<RequireDeviceExtension>>::init(key).atlas(entities);
+    for (auto& [ext] : deviceRows)
         addUnique(req.deviceExtensions, ext.names);
-    }
 
-    auto rows10 = cmd::DynamicQuery<With<
-        RequireFeatures10
-    >, cmd::View<
-        Include<RequireFeatures10>
-    >>::init(key).atlas(entities);
-    for (size_t i = 0; i < rows10.size(); i++) {
-        auto [f] = rows10[i];
+    auto rows10 = cmd::Query<With<RequireFeatures10>>::init(key).atlas(entities);
+    for (auto& [f] : rows10)
         orBools(&req.features10, &f.features, F10_FIRST, F10_LAST);
-    }
 
-    auto rows11 = cmd::DynamicQuery<With<
-        RequireFeatures11
-    >, cmd::View<
-        Include<RequireFeatures11>
-    >>::init(key).atlas(entities);
-    for (size_t i = 0; i < rows11.size(); i++) {
-        auto [f] = rows11[i];
+    auto rows11 = cmd::Query<With<RequireFeatures11>>::init(key).atlas(entities);
+    for (auto& [f] : rows11)
         orBools(&req.features11, &f.features, F11_FIRST, F11_LAST);
-    }
 
-    auto rows12 = cmd::DynamicQuery<With<
-        RequireFeatures12
-    >, cmd::View<
-        Include<RequireFeatures12>
-    >>::init(key).atlas(entities);
-    for (size_t i = 0; i < rows12.size(); i++) {
-        auto [f] = rows12[i];
+    auto rows12 = cmd::Query<With<RequireFeatures12>>::init(key).atlas(entities);
+    for (auto& [f] : rows12)
         orBools(&req.features12, &f.features, F12_FIRST, F12_LAST);
-    }
 
-    auto rows13 = cmd::DynamicQuery<With<
-        RequireFeatures13
-    >, cmd::View<
-        Include<RequireFeatures13>
-    >>::init(key).atlas(entities);
-    for (size_t i = 0; i < rows13.size(); i++) {
-        auto [f] = rows13[i];
+    auto rows13 = cmd::Query<With<RequireFeatures13>>::init(key).atlas(entities);
+    for (auto& [f] : rows13)
         orBools(&req.features13, &f.features, F13_FIRST, F13_LAST);
-    }
 
     return req;
 }
@@ -495,11 +459,7 @@ void Core::diagnoseDevices(VkInstance instance, const Requirements& req) {
 /* -------------------------------------------------------------------- */
 
 void Core::build(const Key<key::WRITE>& key, const DynamicView& entities) {
-    auto rows = cmd::DynamicQuery<With<
-        WindowSettings, RendererSettings
-    >, cmd::View<
-        Include<WindowSettings, RendererSettings>
-    >>::init(key).atlas(entities);
+    auto rows = cmd::Query<With<WindowSettings, RendererSettings>>::init(key).atlas(entities);
 
     if (rows.empty()) {
         M_ERRORF("Core needs one entity with WindowSettings and RendererSettings in its Context");
@@ -565,7 +525,7 @@ void Core::initVulkan(
 
     vkb::Instance vkbInst = unwrap(builder.build(), "Instance creation");
 
-    // Grab the instance 
+    // Grab the instance
     core.foundation.instance = vkbInst.instance;
     core.foundation.debugMessenger = vkbInst.debug_messenger;
 
@@ -671,7 +631,7 @@ void Core::initCommands(RenderCore& core) {
         core.foundation.queueFamily,
         VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
     );
-    
+
     for (u32 i = 0; i < RenderCore::FrameData::FRAME_OVERLAP; i++) {
         VK_CHECK(vkCreateCommandPool(
             core.foundation.device,
@@ -739,9 +699,10 @@ void recreateSwapchain(RenderCore& core, VkExtent2D desired) {
 }
 
 /*
- * Teardown (the old Renderer::cleanup, which was never called). Attachments
- * need no exit(): everything they create has a deletor in core.dqueue, which
- * is flushed here in reverse order of creation.
+ * Teardown. Attachments need no Vulkan teardown in exit(): everything they
+ * create has a deletor in core.dqueue, which is flushed here in reverse order
+ * of creation. Core is connected first, so moss runs its exit last, after every
+ * attachment's own exit.
  */
 void Core::exit(const Key<key::WRITE>& key) {
     auto resource = cmd::Resource<RenderCore>::init(key);

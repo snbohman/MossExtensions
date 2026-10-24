@@ -107,8 +107,7 @@ private:
     /* Everything the record loop needs for one pass */
     struct CompiledPass {
         Kind kind = Kind::Compute;
-        Entity entity = entt::null;
-        DynamicView entityView;              // one element, for the per-tick PushConstants lookup
+        Entity entity = entt::null;          // for the per-tick PushConstants lookup
         std::string label;
 
         std::shared_ptr<PipelineHolder> pipeline;           // swapped by a hot reload

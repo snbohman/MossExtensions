@@ -24,6 +24,10 @@
  * Optional on any pass: Bind, Repeat, Once, PushConstants.
  * Graphics only: PipelineState, DrawCall. Compute only: Dispatch.
  * Optional on any ONE entity of the Context (not a pass): HotReload.
+ *
+ * Plain data is an aggregate, attached with designated initialisers
+ * (.attach<vk::Repeat>({.count = 4})). Bind, Dispatch and PushConstants do
+ * real work in their constructors and are attached with arguments.
  */
 
 namespace moss::extensions::vulkan {
@@ -117,9 +121,8 @@ inline Binding storageReadWrite(u32 index, std::string buffer) {
 }
 
 /*
- * Variadic instead of a braced list (attach cannot forward those). The
- * constraint keeps it from hijacking copy construction: a copy would deduce
- * B = Bind, which is not Binding.
+ * Variadic instead of a braced list. The constraint keeps it from hijacking
+ * copy construction: a copy would deduce B = Bind, which is not Binding.
  */
 struct Bind {
     Bind() = default;
@@ -168,21 +171,22 @@ struct Dispatch {
 /* ------------------------------------------------------------------------ */
 
 /*
- * Graphics passes, optional. Wraps the plain GraphicsState so the generic
- * pipeline builder does not depend on components. Defaults describe the
- * fullscreen triangle: no culling, no blending. The colour format is always
- * the draw image's.
+ * Graphics passes, optional. Defaults describe the fullscreen triangle: no
+ * culling, no blending. The colour format is always the draw image's. PassSystem
+ * copies these fields into the plain GraphicsState of the pipeline builder.
+ *
+ *     .attach<vk::PipelineState>({.blendEnable = true})
  */
 struct PipelineState {
-    VkPrimitiveTopology topology    = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    VkCullModeFlags     cullMode    = VK_CULL_MODE_NONE;
-    VkFrontFace         frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkCullModeFlags     cullMode = VK_CULL_MODE_NONE;
+    VkFrontFace         frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     bool                blendEnable = false;
 };
 
 // Graphics passes, optional. Defaults are the fullscreen triangle.
 struct DrawCall {
-    u32 vertexCount   = 3;
+    u32 vertexCount = 3;
     u32 instanceCount = 1;
 };
 
@@ -191,16 +195,16 @@ struct DrawCall {
 /* ------------------------------------------------------------------------ */
 
 /*
- * Run the pass `count` times back to back (count >= 1). Each iteration that
- * writes a double-buffered resource swaps its sides afterwards.
+ * Run the pass `count` times back to back (count >= 1; 0 is rejected by
+ * PassSystem). Each iteration that writes a double-buffered resource swaps its
+ * sides afterwards.
  */
-
 struct Repeat {
     u32 count = 1;
 };
 
-// Run the pass only on the first frame (seeding an image, for example).
-struct Once { char tag = 0; };
+// Run the pass only on the first frame (seeding an image, for example). A tag.
+struct Once { };
 
 /*
  * Push constants, up to 128 bytes (and the device's maxPushConstantsSize).
@@ -246,8 +250,8 @@ struct PushConstants {
  * warns and uses the first if several carry it). Absent means off: nothing is
  * polled and nothing is stat'd.
  *
- *     .attach<vk::HotReload>()        // poll every 500 ms
- *     .attach<vk::HotReload>(250u)    // poll every 250 ms (0 = every frame)
+ *     .attach<vk::HotReload>()                  // poll every 500 ms
+ *     .attach<vk::HotReload>({.pollMs = 250})   // poll every 250 ms (0 = every frame)
  *
  * What it does: at most every `pollMs`, PassSystem checks the modification time
  * of the SPIR-V file of every pass (a file shared by several passes is checked
@@ -266,7 +270,6 @@ struct PushConstants {
  * that fails to build, logs an error and the old pipeline keeps running. The
  * file is not retried until it changes again.
  */
-
 struct HotReload {
     u32 pollMs = 500;
 };
