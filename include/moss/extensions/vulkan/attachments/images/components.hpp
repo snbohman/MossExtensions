@@ -3,7 +3,6 @@
 #include "moss/extensions/vulkan/meta.hpp"
 
 #include <string>
-#include <utility>
 
 namespace moss::extensions::vulkan {
 
@@ -18,7 +17,9 @@ namespace moss::extensions::vulkan {
  * the window when it is resized.
  *
  * Name rules: non-empty, unique across SimImage AND SimBuffer, and not
- * DRAW_IMAGE_NAME ("draw").
+ * DRAW_IMAGE_NAME ("draw"). An empty name is caught by ImageSystem at build.
+ *
+ *     .attach<vk::SimImage>({.name = "pressure"})
  */
 struct SimImage {
     std::string name;
@@ -29,16 +30,16 @@ struct SimImage {
  * Optional on a SimImage entity. Relative to the INITIAL draw extent (the one
  * at build time). Must be greater than 0. Not combinable with ImageExtent.
  */
-
 struct ImageScale {
     float scale = 1.0f;
 };
 
 /*
  * Optional on a SimImage entity. Explicit size in pixels, both at least 1 and
- * at most the device's maxImageDimension2D. Not combinable with ImageScale.
- * Graphics passes render into the window-sized draw image, so a fixed image can
- * have a different aspect ratio: handling that is the shader's job.
+ * at most the device's maxImageDimension2D (the 0 default is rejected by
+ * ImageSystem). Not combinable with ImageScale. Graphics passes render into
+ * the window-sized draw image, so a fixed image can have a different aspect
+ * ratio: handling that is the shader's job.
  */
 struct ImageExtent {
     u32 width = 0;
@@ -52,9 +53,12 @@ struct ImageExtent {
  * and then keeps its content across frames. There is no initial data upload yet:
  * seed it with a Once pass.
  *
- * Size rules: greater than 0 and a multiple of 4. A buffer bound as a uniform
- * buffer must also fit maxUniformBufferRange, one bound as a storage buffer
- * maxStorageBufferRange (checked per binding). Name rules as for SimImage.
+ * Size rules: greater than 0 and a multiple of 4 (checked by ImageSystem). A
+ * buffer bound as a uniform buffer must also fit maxUniformBufferRange, one
+ * bound as a storage buffer maxStorageBufferRange (checked per binding). Name
+ * rules as for SimImage.
+ *
+ *     .attach<vk::SimBuffer>({.name = "counter", .size = 256})
  */
 struct SimBuffer {
     std::string name;
@@ -65,8 +69,10 @@ struct SimBuffer {
  * Optional tag on a SimImage or SimBuffer entity. The resource gets two sides.
  * Reading gives the current side, writing gives the other one, and the sides
  * swap after each pass iteration that writes the resource.
+ *
+ * An empty type: queries cannot fetch it, systems test for it with has<T>().
  */
-struct DoubleBuffered { char tag = 0; };
+struct DoubleBuffered { };
 
 /*
  * Optional, on at most one entity in the Context. Settings of the one shared
