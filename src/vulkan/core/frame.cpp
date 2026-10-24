@@ -95,6 +95,17 @@ void FrameBegin::tick(const Key<key::READ>& key) {
     utils::transitionImage(
         cmdBuf, core.drawImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL
     );
+
+    // The transition above discards the contents, so define them: a pass that
+    // covers only part of the image then leaves a known colour, not last
+    // frame's. Exposed this undefined behaviour through hot-reloading/(changing
+    // in general) shaders.
+    if (core.config.clearDraw) {
+        VkImageSubresourceRange clearRange = utils::mask::subresourceRange(VK_IMAGE_ASPECT_COLOR_BIT);
+        vkCmdClearColorImage(
+            cmdBuf, core.drawImage.image, VK_IMAGE_LAYOUT_GENERAL, &core.config.clearColor, 1, &clearRange
+        );
+    }
 }
 
 void FrameEnd::tick(const Key<key::READ>& key) {

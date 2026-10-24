@@ -63,6 +63,8 @@ struct RenderCore {
         VkFormat swapchainFormat = VK_FORMAT_B8G8R8A8_UNORM;
         VkFormat drawFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
         bool resizable = false;
+        bool clearDraw = true;
+        VkClearColorValue clearColor = { {0.0f, 0.0f, 0.0f, 1.0f } };
     };
     struct FrameData {
         VkCommandPool commandPool;

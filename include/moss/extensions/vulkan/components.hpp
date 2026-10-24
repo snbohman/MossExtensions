@@ -67,10 +67,13 @@ struct WindowSettings {
  * source, or Core aborts with a message.
  */
 struct RendererSettings {
-    bool validationLayers = true;
-    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
-    VkFormat drawFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-    VkFormat swapchainFormat = VK_FORMAT_B8G8R8A8_UNORM;
+    bool validationLayers                          = true;
+    VkPresentModeKHR presentMode                   = VK_PRESENT_MODE_FIFO_KHR;
+    VkFormat drawFormat                            = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat swapchainFormat                       = VK_FORMAT_B8G8R8A8_UNORM;
+    std::optional<std::array<float, 4>> clearColor = std::array<float, 4>{
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
 };
 
 /* ------------------------------------------------------------------------ */
