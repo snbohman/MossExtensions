@@ -608,6 +608,11 @@ void Core::initSwapchain(
     core.config.swapchainFormat = rendererSettings.swapchainFormat;
     core.config.drawFormat = rendererSettings.drawFormat;
     core.config.resizable = windowSettings.resize;
+    core.config.clearDraw = rendererSettings.clearColor.has_value();
+    if (core.config.clearDraw) {
+        for (int i = 0; i < 4; i++)
+            core.config.clearColor.float32[i] = (*rendererSettings.clearColor)[i];
+    }
 
     checkDrawFormat(core.foundation.physicalDevice, core.config.drawFormat);
 
