@@ -23,11 +23,12 @@ project "mossExtensions"
     targetdir "bin/%{cfg.buildcfg}"
     objdir "build/%{cfg.buildcfg}/%{prj.name}"
 
-    files { "src/**.cpp" }
+    files { "src/**.cpp", "external/**.cpp" }
     includedirs {
         "include",
+        "external",
         "../core/include",
-        "$(VULKAN_SDK)/include"
+        "$(VULKAN_SDK)/include",
     }
 
     links {

@@ -5,10 +5,11 @@
  * can be included without pulling in any Vulkan or moss header.
  */
 namespace moss::extensions::vulkan {}
+namespace moss::extensions::imgui {}
 
 namespace moss {
 
 namespace vk = extensions::vulkan;
-// namespace ig = extensions::imgui;
+namespace ig = extensions::imgui;
 
 }
