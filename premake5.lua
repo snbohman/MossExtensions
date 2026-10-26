@@ -6,13 +6,16 @@ if is_standalone then
 
     workspace("MossDivided")
         language "C++"
-        cppdialect "C++20"
+        -- cppdialect "C++20"
         architecture "x86_64"
         toolset "clang"
+
+        buildoptions { "-std=c++20", "-Wno-nullability-completeness" } 
 
         location "scripts"
         flags { "MultiProcessorCompile" }
         configurations { "debug", "release" }
+        linkoptions { "-fuse-ld=llvm-ar" } 
 
         startproject("mossExtensions") -- Helpful in IDE
 end
@@ -32,10 +35,10 @@ project "mossExtensions"
     }
 
     links {
-        "raylib",
-        "vulkan",
-        "glfw",
-        "vk-bootstrap"
+        -- "raylib",
+        "vulkan-1",
+        "glfw3"
+        -- "vk-bootstrap"
     }
 
     filter "configurations:debug"
