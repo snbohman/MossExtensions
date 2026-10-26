@@ -4,6 +4,7 @@
       "/nix/store/w88q44gqd1qg5wmkk7v0h97rpiqvam0l-gcc-wrapper-15.3.0/bin/g++",
       "-DDEBUG",
       "-I../include",
+      "-I../external",
       "-I../../core/include",
       "-I/include",
       "-m64",
@@ -11,11 +12,131 @@
       "-std=c++20",
       "-c",
       "-o",
-      "../build/debug/mossExtensions/image_system.o",
-      "../src/vulkan/attachments/images/image_system.cpp"
+      "../build/debug/mossExtensions/imgui.o",
+      "../external/imgui/imgui.cpp"
     ],
     "directory": "/home/snbohman/dev/moss/extensions/scripts",
-    "file": "/home/snbohman/dev/moss/extensions/src/vulkan/attachments/images/image_system.cpp",
-    "output": "/home/snbohman/dev/moss/extensions/build/debug/mossExtensions/image_system.o"
+    "file": "/home/snbohman/dev/moss/extensions/external/imgui/imgui.cpp",
+    "output": "/home/snbohman/dev/moss/extensions/build/debug/mossExtensions/imgui.o"
+  },
+  {
+    "arguments": [
+      "/nix/store/w88q44gqd1qg5wmkk7v0h97rpiqvam0l-gcc-wrapper-15.3.0/bin/g++",
+      "-DDEBUG",
+      "-I../include",
+      "-I../external",
+      "-I../../core/include",
+      "-I/include",
+      "-m64",
+      "-g",
+      "-std=c++20",
+      "-c",
+      "-o",
+      "../build/debug/mossExtensions/imgui_demo.o",
+      "../external/imgui/imgui_demo.cpp"
+    ],
+    "directory": "/home/snbohman/dev/moss/extensions/scripts",
+    "file": "/home/snbohman/dev/moss/extensions/external/imgui/imgui_demo.cpp",
+    "output": "/home/snbohman/dev/moss/extensions/build/debug/mossExtensions/imgui_demo.o"
+  },
+  {
+    "arguments": [
+      "/nix/store/w88q44gqd1qg5wmkk7v0h97rpiqvam0l-gcc-wrapper-15.3.0/bin/g++",
+      "-DDEBUG",
+      "-I../include",
+      "-I../external",
+      "-I../../core/include",
+      "-I/include",
+      "-m64",
+      "-g",
+      "-std=c++20",
+      "-c",
+      "-o",
+      "../build/debug/mossExtensions/imgui_draw.o",
+      "../external/imgui/imgui_draw.cpp"
+    ],
+    "directory": "/home/snbohman/dev/moss/extensions/scripts",
+    "file": "/home/snbohman/dev/moss/extensions/external/imgui/imgui_draw.cpp",
+    "output": "/home/snbohman/dev/moss/extensions/build/debug/mossExtensions/imgui_draw.o"
+  },
+  {
+    "arguments": [
+      "/nix/store/w88q44gqd1qg5wmkk7v0h97rpiqvam0l-gcc-wrapper-15.3.0/bin/g++",
+      "-DDEBUG",
+      "-I../include",
+      "-I../external",
+      "-I../../core/include",
+      "-I/include",
+      "-m64",
+      "-g",
+      "-std=c++20",
+      "-c",
+      "-o",
+      "../build/debug/mossExtensions/imgui_impl_glfw.o",
+      "../external/imgui/imgui_impl_glfw.cpp"
+    ],
+    "directory": "/home/snbohman/dev/moss/extensions/scripts",
+    "file": "/home/snbohman/dev/moss/extensions/external/imgui/imgui_impl_glfw.cpp",
+    "output": "/home/snbohman/dev/moss/extensions/build/debug/mossExtensions/imgui_impl_glfw.o"
+  },
+  {
+    "arguments": [
+      "/nix/store/w88q44gqd1qg5wmkk7v0h97rpiqvam0l-gcc-wrapper-15.3.0/bin/g++",
+      "-DDEBUG",
+      "-I../include",
+      "-I../external",
+      "-I../../core/include",
+      "-I/include",
+      "-m64",
+      "-g",
+      "-std=c++20",
+      "-c",
+      "-o",
+      "../build/debug/mossExtensions/imgui_impl_vulkan.o",
+      "../external/imgui/imgui_impl_vulkan.cpp"
+    ],
+    "directory": "/home/snbohman/dev/moss/extensions/scripts",
+    "file": "/home/snbohman/dev/moss/extensions/external/imgui/imgui_impl_vulkan.cpp",
+    "output": "/home/snbohman/dev/moss/extensions/build/debug/mossExtensions/imgui_impl_vulkan.o"
+  },
+  {
+    "arguments": [
+      "/nix/store/w88q44gqd1qg5wmkk7v0h97rpiqvam0l-gcc-wrapper-15.3.0/bin/g++",
+      "-DDEBUG",
+      "-I../include",
+      "-I../external",
+      "-I../../core/include",
+      "-I/include",
+      "-m64",
+      "-g",
+      "-std=c++20",
+      "-c",
+      "-o",
+      "../build/debug/mossExtensions/imgui_tables.o",
+      "../external/imgui/imgui_tables.cpp"
+    ],
+    "directory": "/home/snbohman/dev/moss/extensions/scripts",
+    "file": "/home/snbohman/dev/moss/extensions/external/imgui/imgui_tables.cpp",
+    "output": "/home/snbohman/dev/moss/extensions/build/debug/mossExtensions/imgui_tables.o"
+  },
+  {
+    "arguments": [
+      "/nix/store/w88q44gqd1qg5wmkk7v0h97rpiqvam0l-gcc-wrapper-15.3.0/bin/g++",
+      "-DDEBUG",
+      "-I../include",
+      "-I../external",
+      "-I../../core/include",
+      "-I/include",
+      "-m64",
+      "-g",
+      "-std=c++20",
+      "-c",
+      "-o",
+      "../build/debug/mossExtensions/imgui_widgets.o",
+      "../external/imgui/imgui_widgets.cpp"
+    ],
+    "directory": "/home/snbohman/dev/moss/extensions/scripts",
+    "file": "/home/snbohman/dev/moss/extensions/external/imgui/imgui_widgets.cpp",
+    "output": "/home/snbohman/dev/moss/extensions/build/debug/mossExtensions/imgui_widgets.o"
   }
 ]

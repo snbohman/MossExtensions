@@ -26,19 +26,12 @@ project "mossExtensions"
     targetdir "bin/%{cfg.buildcfg}"
     objdir "build/%{cfg.buildcfg}/%{prj.name}"
 
-    files { "src/**.cpp" }
+    files { "src/**.cpp", "external/**.cpp" }
     includedirs {
         "include",
         "external",
         "../core/include",
-        "$(VULKAN_SDK)/Include",
-        "$(GLFW_ROOT)/Include"
-    }
-
-    libdirs {
-        "external",
-        "$(VULKAN_SDK)/Lib",
-        "$(GLFW_ROOT)/lib-vc2022"
+        "$(VULKAN_SDK)/include",
     }
 
     links {
