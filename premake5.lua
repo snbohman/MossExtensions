@@ -32,6 +32,7 @@ project "mossExtensions"
         "external",
         "../core/include",
         "$(VULKAN_SDK)/include",
+        os.getenv("USERPROFILE") .. "/scoop/apps/glfw/current/include"
     }
 
     links {
